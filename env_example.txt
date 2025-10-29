@@ -1,0 +1,17 @@
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+
+# Tron API Configuration
+TRON_API_URL=https://api.trongrid.io
+TRON_API_KEY=your_tron_api_key_here_optional
+
+# Payment API Configuration
+PAYMENT_API_KEY=rsG7Hzt0EaEY5ZoEH4eE96SiY234qpiSYg5d92xrSm4
+
+# Database Configuration (Railway will provide this)
+DATABASE_URL=sqlite:///payments.db
+
+# Bot Settings
+CHECK_INTERVAL=60
+CONFIRMATION_BLOCKS=3
+

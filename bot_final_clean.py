@@ -117,6 +117,7 @@ class CryptoBot:
         """Настройка обработчиков"""
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("menu", self.menu_command))
+        self.application.add_handler(CommandHandler("admin", self.admin_command))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
@@ -534,6 +535,13 @@ class CryptoBot:
             await self.show_payment_info(update, context)
         elif data == "check_payment":
             await self.check_payment_status(update, context)
+        elif data.startswith("pay_deposit_"):
+            payment_id = data.split("_")[2]
+            await self.pay_deposit(update, context, payment_id)
+        elif data == "admin_panel":
+            await self.show_admin_panel(update, context)
+        elif data == "deposit_payments":
+            await self.show_deposit_payments(update, context)
     
     async def show_deposit_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать меню пополнения"""
@@ -924,6 +932,279 @@ class CryptoBot:
             )
             # Отслеживаем новое сообщение
             await self.track_message(update, sent_message.message_id)
+    
+    async def show_deposit_payments(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать выплаты вкладов по дням"""
+        user = update.effective_user
+        
+        if not self.is_admin(user.id):
+            await self.safe_edit_message(update, "❌ У вас нет прав администратора")
+            return
+        
+        try:
+            # Получаем все выплаты объединенные
+            all_payments = self.get_deposit_payments_by_day()
+        except Exception as e:
+            logger.error(f"Ошибка получения выплат вкладов: {e}")
+            await self.safe_edit_message(
+                update,
+                f"❌ Ошибка получения данных: {e}",
+                InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]])
+            )
+            return
+        
+        if not all_payments:
+            message_text = "💰 Нет выплат вкладов"
+            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
+        else:
+            message_text = "💰 ВЫПЛАТЫ ВКЛАДОВ\n\n"
+            
+            # Группируем по дням
+            days_dict = {}
+            for day_data in all_payments:
+                days_remaining, payment_date, deposit_type, payment_count, total_amount, payment_details = day_data
+                
+                if days_remaining not in days_dict:
+                    days_dict[days_remaining] = {
+                        'date': payment_date,
+                        'total_count': 0,
+                        'total_amount': 0,
+                        'original_amount': 0
+                    }
+                
+                days_dict[days_remaining]['total_count'] += payment_count
+                days_dict[days_remaining]['total_amount'] += total_amount
+                
+                # Получаем оригинальную сумму для расчета процентов
+                original_amount_for_type = self.get_original_amount_for_day(days_remaining, deposit_type)
+                days_dict[days_remaining]['original_amount'] += original_amount_for_type
+            
+            # Показываем все дни в формате "день/число заявок/общая сумма"
+            days_lines = []
+            for days_remaining in sorted(days_dict.keys(), reverse=True):
+                day_info = days_dict[days_remaining]
+                days_lines.append(f"{days_remaining}д-{day_info['total_count']}/{day_info['total_amount']:.0f}$")
+            
+            # Разбиваем на строки по 6 дней для компактности
+            for i in range(0, len(days_lines), 6):
+                line = days_lines[i:i+6]
+                message_text += " ".join(line) + "\n"
+            
+            message_text += "\n"
+            
+            # Показываем подробную информацию о заявке на рассмотрении
+            first_payment = self.get_first_urgent_deposit_payment()
+            if first_payment:
+                user_name = first_payment.get('first_name', 'Unknown')
+                username = f"@{first_payment.get('username', '')}" if first_payment.get('username') else ""
+                
+                # Получаем процент вклада и дополнительную информацию
+                deposit_type = first_payment.get('deposit_type', '10_days')
+                profit_percent = 30 if deposit_type == '30_days' else 8
+                deposit_days = 30 if deposit_type == '30_days' else 10
+                
+                # Получаем оригинальную сумму вклада
+                original_amount = self.get_original_amount_for_payment(first_payment['id'])
+                
+                # Рассчитываем процент
+                profit_amount = first_payment['amount'] - original_amount
+                
+                message_text += "🔍 ЗАЯВКА НА РАССМОТРЕНИИ:\n"
+                message_text += f"💰 Первоначальный вклад: {original_amount:.2f} USDT\n"
+                message_text += f"💵 Процент прибыли: {profit_amount:.2f} USDT ({profit_percent}%)\n"
+                message_text += f"🏦 Кошелек: {first_payment['wallet_address']}\n"
+                message_text += f"📅 Дата создания: {first_payment['created_at']}\n"
+                message_text += f"🆔 ID заявки: #{first_payment['id']}\n"
+                message_text += f"💸 НУЖНО ОТПРАТИТЬ: {first_payment['amount']:.2f} USDT\n"
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ Рассмотрено", callback_data=f"pay_deposit_{first_payment['id']}")],
+                    [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+                ]
+            else:
+                keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await self.safe_edit_message(update, message_text, reply_markup)
+    
+    def get_deposit_payments_by_day(self):
+        """Получить выплаты вкладов по дням"""
+        try:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT 
+                        dp.days_remaining,
+                        dp.payment_date,
+                        dp.deposit_type,
+                        COUNT(*) as payment_count,
+                        SUM(dp.return_amount) as total_amount,
+                        '' as payment_details
+                    FROM deposit_payments dp
+                    WHERE dp.status = 'pending'
+                    GROUP BY dp.days_remaining, dp.payment_date, dp.deposit_type
+                    ORDER BY dp.days_remaining DESC
+                '''
+                
+                cursor.execute(query)
+                return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Ошибка получения выплат по дням: {e}")
+            return []
+    
+    def get_first_urgent_deposit_payment(self):
+        """Получить первую срочную выплату депозита (сегодня)"""
+        try:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT 
+                        dp.id,
+                        dp.wallet_address,
+                        dp.return_amount as amount,
+                        dp.created_at,
+                        u.first_name,
+                        u.username,
+                        dp.deposit_type
+                    FROM deposit_payments dp
+                    JOIN users u ON dp.user_id = u.telegram_id
+                    WHERE dp.days_remaining = 1 
+                    AND dp.status = 'pending'
+                    ORDER BY dp.id
+                    LIMIT 1
+                '''
+                
+                cursor.execute(query)
+                result = cursor.fetchone()
+                
+                if result:
+                    return {
+                        'id': result[0],
+                        'wallet_address': result[1],
+                        'amount': result[2],
+                        'created_at': result[3],
+                        'first_name': result[4],
+                        'username': result[5],
+                        'deposit_type': result[6]
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка получения срочной выплаты: {e}")
+            return None
+    
+    def get_original_amount_for_day(self, days_remaining, deposit_type):
+        """Получить оригинальную сумму для дня и типа депозита"""
+        try:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT SUM(original_amount) 
+                    FROM deposit_payments 
+                    WHERE days_remaining = ? AND deposit_type = ? AND status = 'pending'
+                '''
+                
+                cursor.execute(query, (days_remaining, deposit_type))
+                result = cursor.fetchone()
+                
+                return result[0] if result[0] else 0
+        except Exception as e:
+            logger.error(f"Ошибка получения оригинальной суммы: {e}")
+            return 0
+    
+    def get_original_amount_for_payment(self, payment_id):
+        """Получить оригинальную сумму для конкретного платежа"""
+        try:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT original_amount 
+                    FROM deposit_payments 
+                    WHERE id = ?
+                '''
+                
+                cursor.execute(query, (payment_id,))
+                result = cursor.fetchone()
+                
+                return result[0] if result[0] else 0
+        except Exception as e:
+            logger.error(f"Ошибка получения оригинальной суммы платежа: {e}")
+            return 0
+    
+    def is_admin(self, user_id: int) -> bool:
+        """Проверить, является ли пользователь администратором"""
+        return user_id in [999999999]  # Добавьте сюда ID администраторов
+    
+    async def show_admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать админ панель"""
+        user = update.effective_user
+        
+        if not self.is_admin(user.id):
+            await self.safe_edit_message(update, "❌ У вас нет прав администратора")
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("💰 Выплаты вкладов", callback_data="deposit_payments")],
+            [InlineKeyboardButton("📋 Заявки на вывод", callback_data="withdrawal_requests")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await self.safe_edit_message(update, "🔧 АДМИН ПАНЕЛЬ", reply_markup)
+    
+    async def safe_edit_message(self, update: Update, text: str, reply_markup=None):
+        """Безопасное редактирование сообщения"""
+        try:
+            if update.callback_query:
+                await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(text=text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Ошибка редактирования сообщения: {e}")
+            if update.callback_query:
+                await update.callback_query.message.reply_text(text=text, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(text=text, reply_markup=reply_markup)
+    
+    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /admin"""
+        await self.show_admin_panel(update, context)
+    
+    async def pay_deposit(self, update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str):
+        """Обработать выплату депозита и показать следующую"""
+        user = update.effective_user
+        
+        if not self.is_admin(user.id):
+            await self.safe_edit_message(update, "❌ У вас нет прав администратора")
+            return
+        
+        try:
+            # Отмечаем выплату как выполненную
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE deposit_payments 
+                    SET status = 'paid', paid_at = CURRENT_TIMESTAMP, paid_by = ?
+                    WHERE id = ?
+                ''', (user.id, payment_id))
+                conn.commit()
+            
+            logger.info(f"Выплата депозита {payment_id} обработана администратором {user.id}")
+            
+            # Показываем следующую заявку на выплату (если есть)
+            await self.show_deposit_payments(update, context)
+            
+        except Exception as e:
+            logger.error(f"Ошибка обработки выплаты депозита {payment_id}: {e}")
+            await self.safe_edit_message(
+                update, 
+                f"❌ Ошибка обработки выплаты: {e}",
+                InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]])
+            )
     
     def run(self):
         """Запуск бота"""

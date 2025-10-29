@@ -2,6 +2,7 @@
 """
 Пирамммида - Telegram Crypto Payment Bot
 Простой и надежный бот для пополнения баланса через USDT
+Версия: 2.0.0 - Интеграция с Payment Bot API
 """
 
 import logging
@@ -13,6 +14,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 from crypto_bot import create_invoice, check_payment_status, get_balance, CRYPTO_BOT_TOKEN
+from payment_client_integration import PaymentClient
 
 # Настройка логирования
 logging.basicConfig(
@@ -25,6 +27,16 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "8204117323:AAEe4-1jEKpSkpr13-FYjdSdFeBdbQHpNcY"
 DATABASE_PATH = "bot_database.db"
 CRYPTO_BOT_TOKEN = "469004:AAFOCI5N0HAQg3RbUKynaRO0cSzADVj0x8R"
+
+# Payment Bot API настройки
+PAYMENT_API_URL = "http://localhost:8001"
+PAYMENT_API_KEY = "rsG7Hzt0EaEY5ZoEH4eE96SiY234qpiSYg5d92xrSm4"
+
+# Процентные ставки для депозитов (исправлено)
+DEPOSIT_RATES = {
+    10: 8.0,   # 8% за 10 дней
+    30: 15.0   # 15% за 30 дней
+}
 
 # Реферальная система - проценты по уровням
 REFERRAL_PERCENTAGES = {
@@ -44,6 +56,25 @@ class CryptoBot:
         self.setup_handlers()
         # Словарь для хранения ID сообщений пользователей
         self.user_messages = {}
+        # Инициализация PaymentClient
+        self.payment_client = PaymentClient(PAYMENT_API_KEY, PAYMENT_API_URL)
+    
+    def calculate_deposit_profit(self, amount: float, days: int) -> dict:
+        """Правильный расчет прибыли по депозиту"""
+        if days not in DEPOSIT_RATES:
+            return {"error": f"Неподдерживаемый срок депозита: {days} дней"}
+        
+        rate = DEPOSIT_RATES[days]
+        profit = amount * (rate / 100)
+        total = amount + profit
+        
+        return {
+            "amount": amount,
+            "days": days,
+            "rate": rate,
+            "profit": profit,
+            "total": total
+        }
     
     def init_database(self):
         """Инициализация базы данных"""
@@ -111,13 +142,64 @@ class CryptoBot:
                 )
             ''')
             
+            # Таблица администраторов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Таблица заявок на вывод
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS withdrawal_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount REAL,
+                    wallet_address TEXT,
+                    status TEXT DEFAULT 'pending',
+                    admin_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                )
+            ''')
+            
+            # Таблица выплат вкладов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS deposit_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    original_amount REAL,
+                    return_amount REAL,
+                    payment_date DATE,
+                    days_remaining INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    paid_at TIMESTAMP,
+                    paid_by INTEGER,
+                    deposit_type TEXT,
+                    wallet_address TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (telegram_id)
+                )
+            ''')
+            
             conn.commit()
     
     def setup_handlers(self):
         """Настройка обработчиков"""
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("menu", self.menu_command))
+        self.application.add_handler(CommandHandler("addadmin", self.add_admin_command))
+        self.application.add_handler(CommandHandler("wallet", self.wallet_command))
+        self.application.add_handler(CommandHandler("pay", self.pay_command))
+        self.application.add_handler(CommandHandler("balance", self.balance_command))
+        self.application.add_handler(CommandHandler("calc", self.calc_command))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        self.application.add_handler(CallbackQueryHandler(self.check_payment_callback, pattern="^check_payment$"))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         # Добавляем обработчик ошибок
@@ -924,6 +1006,202 @@ class CryptoBot:
             )
             # Отслеживаем новое сообщение
             await self.track_message(update, sent_message.message_id)
+    
+    async def wallet_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для указания кошелька пользователя"""
+        user_id = update.effective_user.id
+        
+        # Проверяем, есть ли кошелек в сообщении
+        if len(context.args) < 1:
+            await update.message.reply_text(
+                "💳 **Укажите ваш кошелек**\n\n"
+                "Использование: `/wallet TYourWalletAddress123456789`\n\n"
+                "Этот кошелек будет использоваться для проверки ваших платежей."
+            )
+            return
+        
+        wallet_address = context.args[0]
+        
+        # Сохраняем кошелек в базу данных
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users SET wallet_address = ? WHERE telegram_id = ?
+            ''', (wallet_address, user_id))
+            conn.commit()
+        
+        await update.message.reply_text(
+            f"✅ **Кошелек сохранен!**\n\n"
+            f"📱 Ваш кошелек: `{wallet_address}`\n\n"
+            f"Теперь вы можете использовать команду `/pay` для пополнения баланса."
+        )
+    
+    async def pay_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для пополнения баланса"""
+        user_id = update.effective_user.id
+        
+        # Получаем кошелек пользователя
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT wallet_address FROM users WHERE telegram_id = ?', (user_id,))
+            result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            await update.message.reply_text(
+                "❌ **Сначала укажите ваш кошелек**\n\n"
+                "Используйте команду: `/wallet TYourWalletAddress123456789`"
+            )
+            return
+        
+        user_wallet = result[0]
+        
+        # Получаем активный кошелек для приема платежей
+        response = self.payment_client.get_payment_wallet(user_wallet)
+        
+        if not response.get('success'):
+            await update.message.reply_text(f"❌ Ошибка получения кошелька: {response.get('error')}")
+            return
+        
+        active_wallet = response['wallet_address']
+        
+        # Создаем клавиатуру
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Проверить платеж", callback_data="check_payment")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel_payment")]
+        ])
+        
+        await update.message.reply_text(
+            f"💳 **Пополнение баланса**\n\n"
+            f"📱 Ваш кошелек: `{user_wallet}`\n"
+            f"🏦 Кошелек для оплаты: `{active_wallet}`\n\n"
+            f"Переведите средства на указанный кошелек, "
+            f"затем нажмите кнопку 'Проверить платеж'",
+            reply_markup=keyboard
+        )
+    
+    async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для проверки баланса"""
+        user_id = update.effective_user.id
+        
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT balance FROM users WHERE telegram_id = ?', (user_id,))
+            result = cursor.fetchone()
+        
+        balance = result[0] if result else 0.0
+        
+        await update.message.reply_text(
+            f"💰 **Ваш баланс**\n\n"
+            f"💵 Баланс: {balance} USDT\n"
+            f"📱 ID: {user_id}"
+        )
+    
+    async def check_payment_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Проверка платежа пользователя"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        
+        # Получаем кошелек пользователя
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT wallet_address FROM users WHERE telegram_id = ?', (user_id,))
+            result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            await query.edit_message_text("❌ Кошелек не найден")
+            return
+        
+        user_wallet = result[0]
+        
+        # Проверяем платежи
+        response = self.payment_client.check_user_payments(user_wallet)
+        
+        if not response.get('success'):
+            await query.edit_message_text(f"❌ Ошибка: {response.get('error')}")
+            return
+        
+        payments = response.get('payments', [])
+        
+        if not payments:
+            await query.edit_message_text("⏳ Платеж еще не поступил. Попробуйте позже.")
+            return
+        
+        # Обрабатываем платежи
+        total_amount = 0
+        for payment in payments:
+            if payment['confirmed']:
+                total_amount += payment['amount']
+                
+                # Обновляем баланс
+                with sqlite3.connect(DATABASE_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE users SET balance = balance + ? WHERE telegram_id = ?
+                    ''', (payment['amount'], user_id))
+                    conn.commit()
+        
+        if total_amount > 0:
+            await query.edit_message_text(
+                f"✅ **Платеж подтвержден!**\n\n"
+                f"💰 Зачислено: {total_amount} USDT\n"
+                f"📱 Ваш кошелек: `{user_wallet}`\n\n"
+                f"Используйте команду `/balance` для проверки баланса."
+            )
+        else:
+            await query.edit_message_text("⏳ Платеж еще не поступил. Попробуйте позже.")
+    
+    async def calc_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для расчета депозитов"""
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "🧮 **Калькулятор депозитов**\n\n"
+                "Использование: `/calc <сумма> <дни>`\n\n"
+                "**Примеры:**\n"
+                "• `/calc 1000 10` - 1000 USDT на 10 дней (8%)\n"
+                "• `/calc 1500 30` - 1500 USDT на 30 дней (15%)\n\n"
+                "**Доступные сроки:**\n"
+                "• 10 дней - 8% прибыли\n"
+                "• 30 дней - 15% прибыли"
+            )
+            return
+        
+        try:
+            amount = float(context.args[0])
+            days = int(context.args[1])
+            
+            if amount <= 0:
+                await update.message.reply_text("❌ Сумма должна быть больше 0")
+                return
+            
+            if days <= 0:
+                await update.message.reply_text("❌ Количество дней должно быть больше 0")
+                return
+            
+            # Рассчитываем депозит
+            result = self.calculate_deposit_profit(amount, days)
+            
+            if "error" in result:
+                await update.message.reply_text(f"❌ {result['error']}")
+                return
+            
+            await update.message.reply_text(
+                f"🧮 **Расчет депозита**\n\n"
+                f"💰 **Сумма депозита:** {result['amount']} USDT\n"
+                f"📅 **Срок:** {result['days']} дней\n"
+                f"📈 **Процентная ставка:** {result['rate']}%\n"
+                f"💵 **Прибыль:** {result['profit']} USDT\n"
+                f"🎯 **Итого к выплате:** {result['total']} USDT\n\n"
+                f"📊 **Доходность:** {result['rate']}% за {result['days']} дней"
+            )
+            
+        except ValueError:
+            await update.message.reply_text(
+                "❌ **Ошибка в параметрах**\n\n"
+                "Используйте числа для суммы и дней.\n"
+                "Пример: `/calc 1000 10`"
+            )
     
     def run(self):
         """Запуск бота"""

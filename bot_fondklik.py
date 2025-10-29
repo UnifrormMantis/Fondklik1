@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Пирамммида - Telegram Crypto Payment Bot
-Простой и надежный бот для пополнения баланса через USDT
+ФондКлик - Telegram Crypto Payment Bot
+Платформа для управления цифровыми активами
 """
 
 import logging
 import sqlite3
 import hashlib
 import asyncio
+import os
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
-from crypto_bot import create_invoice, check_payment_status, get_balance, CRYPTO_BOT_TOKEN
+# Убираем зависимость от crypto_bot
 
 # Настройка логирования
 logging.basicConfig(
@@ -111,14 +112,61 @@ class CryptoBot:
                 )
             ''')
             
+            # Таблица администраторов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Таблица заявок на вывод
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS withdrawal_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount REAL,
+                    wallet_address TEXT,
+                    status TEXT DEFAULT 'pending',
+                    admin_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                )
+            ''')
+            
+            # Таблица выплат вкладов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS deposit_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    original_amount REAL,
+                    return_amount REAL,
+                    payment_date DATE,
+                    days_remaining INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    paid_at TIMESTAMP,
+                    paid_by INTEGER,
+                    deposit_type TEXT,
+                    wallet_address TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (telegram_id)
+                )
+            ''')
+            
             conn.commit()
     
     def setup_handlers(self):
         """Настройка обработчиков"""
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("menu", self.menu_command))
+        self.application.add_handler(CommandHandler("addadmin", self.add_admin_command))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         
         # Добавляем обработчик ошибок
         self.application.add_error_handler(self.error_handler)
@@ -483,12 +531,11 @@ class CryptoBot:
         
         # Формируем сообщение
         message_text = f"""
-🔺 Добро пожаловать в Пирамммида!
+🎯 ФондКлик
 
-Этот бот позволяет вам:
-• Пополнять баланс через USDT
-• Участвовать в многоуровневой реферальной программе
-• Получать быстрые и безопасные переводы
+ФондКлик — это платформа для управления цифровыми активами, где пользователи могут размещать краткосрочные депозиты с фиксированной доходностью.
+
+Пул из размещенных вкладов используется в работе нескольких проектов, прибыль от которых распределяется между пользователями, предоставившими свои средства.
 
 Для начала работы выберите нужную опцию ниже.
         """
@@ -819,10 +866,10 @@ class CryptoBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         message_text = """
-ℹ️ Справка - Пирамммида
+ℹ️ Справка - ФондКлик
 
-🔺 Этот бот позволяет:
-• Пополнять баланс через USDT
+🎯 Этот бот позволяет:
+• Размещать депозиты через USDT
 • Участвовать в реферальной программе
 • Отслеживать историю транзакций
 
@@ -925,9 +972,87 @@ class CryptoBot:
             # Отслеживаем новое сообщение
             await self.track_message(update, sent_message.message_id)
     
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик фотографий"""
+        user = update.effective_user
+        message = update.message
+        
+        # Получаем информацию о фото
+        photo = message.photo[-1]  # Берем фото наивысшего качества
+        
+        sent_message = await message.reply_text(
+            f"📸 Спасибо за фото! Размер: {photo.width}x{photo.height}\n\n"
+            "🤖 Используйте кнопки меню для навигации или команду /menu"
+        )
+        
+        # Отслеживаем новое сообщение
+        await self.track_message(update, sent_message.message_id)
+    
+    def _acquire_lock(self):
+        """Получить блокировку файла для предотвращения множественного запуска"""
+        try:
+            import fcntl
+            self.lock_fd = open(self.lock_file, 'w')
+            fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.lock_fd.write(str(os.getpid()))
+            self.lock_fd.flush()
+            return True
+        except (IOError, OSError):
+            return False
+    
+    def _release_lock(self):
+        """Освободить блокировку файла"""
+        if self.lock_fd:
+            try:
+                import fcntl
+                fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+                self.lock_fd.close()
+                os.unlink(self.lock_file)
+            except:
+                pass
+            self.lock_fd = None
+
+    def is_admin(self, telegram_id):
+        """Проверить, является ли пользователь администратором"""
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            admin = cursor.execute('SELECT telegram_id FROM admins WHERE telegram_id = ?', (telegram_id,)).fetchone()
+            return admin is not None
+    
+    def add_admin(self, telegram_id, username, first_name, last_name):
+        """Добавить администратора"""
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO admins (telegram_id, username, first_name, last_name)
+                VALUES (?, ?, ?, ?)
+            ''', (telegram_id, username, first_name, last_name))
+            conn.commit()
+    
+    async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для добавления администратора"""
+        user = update.effective_user
+        
+        # Проверяем, является ли пользователь администратором
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ У вас нет прав для добавления администраторов")
+            return
+        
+        if not context.args:
+            await update.message.reply_text("Использование: /addadmin <telegram_id>")
+            return
+        
+        # Получаем telegram_id из аргументов
+        try:
+            admin_id = int(context.args[0])
+            self.add_admin(admin_id, f"admin_{admin_id}", "Admin", "User")
+            await update.message.reply_text(f"✅ Пользователь {admin_id} добавлен как администратор")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат. Используйте: /addadmin <telegram_id>")
+    
     def run(self):
         """Запуск бота"""
-        logger.info("Запуск бота...")
+        logger.info("🤖 ЗАПУСК БОТА - ВЕРСИЯ: bot_fondklik.py (ФОНДКЛИК С АДМИНКОЙ)")
         try:
             self.application.run_polling(
                 allowed_updates=Update.ALL_TYPES,

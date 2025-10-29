@@ -111,12 +111,58 @@ class CryptoBot:
                 )
             ''')
             
+            # Таблица администраторов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Таблица заявок на вывод
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS withdrawal_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount REAL,
+                    wallet_address TEXT,
+                    status TEXT DEFAULT 'pending',
+                    admin_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                )
+            ''')
+            
+            # Таблица выплат вкладов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS deposit_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    original_amount REAL,
+                    return_amount REAL,
+                    payment_date DATE,
+                    days_remaining INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    paid_at TIMESTAMP,
+                    paid_by INTEGER,
+                    deposit_type TEXT,
+                    wallet_address TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (telegram_id)
+                )
+            ''')
+            
             conn.commit()
     
     def setup_handlers(self):
         """Настройка обработчиков"""
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("menu", self.menu_command))
+        self.application.add_handler(CommandHandler("addadmin", self.add_admin_command))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
@@ -479,6 +525,10 @@ class CryptoBot:
             [InlineKeyboardButton("👥 Реферальная система", callback_data="referral_system")],
             [InlineKeyboardButton("ℹ️ Помощь", callback_data="help")]
         ]
+        
+        # Добавляем админские кнопки
+        if self.is_admin(user.id):
+            keyboard.append([InlineKeyboardButton("🔧 Админ панель", callback_data="admin_panel")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Формируем сообщение
@@ -523,6 +573,8 @@ class CryptoBot:
             await self.show_help(update, context)
         elif data == "referral_system":
             await self.show_referral_system(update, context)
+        elif data == "admin_panel":
+            await self.show_admin_panel(update, context)
         elif data == "back_to_menu":
             await self.show_main_menu(update, context)
         elif data == "confirm_wallet":
@@ -924,6 +976,96 @@ class CryptoBot:
             )
             # Отслеживаем новое сообщение
             await self.track_message(update, sent_message.message_id)
+    
+    def is_admin(self, telegram_id):
+        """Проверить, является ли пользователь администратором"""
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            admin = cursor.execute('SELECT telegram_id FROM admins WHERE telegram_id = ?', (telegram_id,)).fetchone()
+            return admin is not None
+    
+    async def show_admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать админ панель"""
+        user = update.effective_user
+        
+        # Проверяем права администратора
+        if not self.is_admin(user.id):
+            await update.callback_query.edit_message_text(
+                "❌ У вас нет прав администратора",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]])
+            )
+            return
+        
+        # Получаем статистику
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            
+            # Общее количество пользователей
+            total_users = cursor.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+            
+            # Общий баланс всех пользователей
+            total_balance = cursor.execute('SELECT COALESCE(SUM(balance), 0) FROM users').fetchone()[0] or 0
+            
+            # Количество транзакций
+            total_transactions = cursor.execute('SELECT COUNT(*) FROM transactions').fetchone()[0]
+            
+            # Успешные транзакции
+            successful_transactions = cursor.execute('SELECT COUNT(*) FROM transactions WHERE status = "completed"').fetchone()[0]
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message_text = f"""
+🔧 АДМИН ПАНЕЛЬ
+
+📊 СТАТИСТИКА:
+👥 Всего пользователей: {total_users}
+💰 Общий баланс: {total_balance:.2f} USDT
+📈 Всего транзакций: {total_transactions}
+✅ Успешных: {successful_transactions}
+
+Выберите действие:
+        """
+        
+        await update.callback_query.edit_message_text(
+            text=message_text,
+            reply_markup=reply_markup
+        )
+    
+    def add_admin(self, telegram_id, username, first_name, last_name):
+        """Добавить администратора"""
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO admins (telegram_id, username, first_name, last_name)
+                VALUES (?, ?, ?, ?)
+            ''', (telegram_id, username, first_name, last_name))
+            conn.commit()
+    
+    async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда для добавления администратора"""
+        user = update.effective_user
+        
+        # Проверяем, является ли пользователь администратором
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ У вас нет прав для добавления администраторов")
+            return
+        
+        if not context.args:
+            await update.message.reply_text("Использование: /addadmin <telegram_id>")
+            return
+        
+        # Получаем telegram_id из аргументов
+        try:
+            admin_id = int(context.args[0])
+            self.add_admin(admin_id, f"admin_{admin_id}", "Admin", "User")
+            await update.message.reply_text(f"✅ Пользователь {admin_id} добавлен как администратор")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат. Используйте: /addadmin <telegram_id>")
     
     def run(self):
         """Запуск бота"""
