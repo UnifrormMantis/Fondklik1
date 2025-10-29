@@ -152,6 +152,9 @@ class FondklikBot:
                 )
             ''')
             
+            # Добавляем дефолтного админа автоматически
+            cursor.execute('INSERT OR IGNORE INTO admins (telegram_id) VALUES (8489431460)')
+            
             conn.commit()
 
     def setup_handlers(self):
