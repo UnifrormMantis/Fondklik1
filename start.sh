@@ -1,17 +1,30 @@
 #!/bin/bash
+# Запуск FondKlik Bot
 
-# Запускаем Payment API в фоне
-python3 simple_payment_api.py &
+echo "🚀 Запуск FondKlik Bot..."
 
-# Ждем 5 секунд пока Payment API запустится
-sleep 5
+# Проверяем наличие .env
+if [ ! -f .env ]; then
+    echo "⚠️  Файл .env не найден!"
+    echo "Создайте .env файл на основе .env.example"
+    exit 1
+fi
 
-# Запускаем Payment Bot (управление кошельками) в фоне
-(cd payment_bot && python3 main.py) &
+# Загружаем переменные окружения
+set -a
+source .env
+set +a
 
-# Ждем 3 секунды
-sleep 3
+# Проверяем токен бота
+if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+    echo "❌ TELEGRAM_BOT_TOKEN не установлен в .env"
+    exit 1
+fi
 
-# Запускаем основной FondKlik Bot
+# Останавливаем старые процессы если есть
+pkill -f "python3 bot_fondklik_correct.py" 2>/dev/null
+sleep 2
+
+# Запускаем бота
+echo "✅ Запускаем бота..."
 python3 bot_fondklik_correct.py
-

@@ -857,7 +857,7 @@ class FondklikBot:
         
         # Получаем активный кошелек из Payment Bot
         from payment_client import payment_client
-        payment_wallet_result = payment_client.get_payment_wallet(user_wallet_from_db)
+        payment_wallet_result = payment_client.get_active_wallet()
         
         if not payment_wallet_result.get("success"):
             # Если Payment Bot недоступен, используем дефолтный кошелек
@@ -866,6 +866,18 @@ class FondklikBot:
         else:
             payment_wallet = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
             logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet}")
+            
+            # Регистрируем кошелек пользователя для отслеживания платежей
+            register_result = payment_client.register_user_wallet(
+                user_id=user.id,
+                user_wallet=user_wallet_from_db,
+                deposit_type="Авто депозит",
+                min_amount=50.0
+            )
+            if register_result.get("success"):
+                logger.info(f"Кошелек пользователя зарегистрирован: {user_wallet_from_db}")
+            else:
+                logger.warning(f"Не удалось зарегистрировать кошелек пользователя: {register_result.get('error')}")
         
         # Сохраняем кошелек для оплаты в контекст
         context.user_data['payment_wallet'] = payment_wallet
@@ -2586,7 +2598,7 @@ https://t.me/your_bot?start={referral_code}
         
         # Получаем активный кошелек из Payment Bot
         from payment_client import payment_client
-        payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
+        payment_wallet_result = payment_client.get_active_wallet()
         
         if not payment_wallet_result.get("success"):
             # Если Payment Bot недоступен, используем дефолтный кошелек
@@ -2595,6 +2607,18 @@ https://t.me/your_bot?start={referral_code}
         else:
             payment_wallet = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
             logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet}")
+            
+            # Регистрируем кошелек пользователя для отслеживания платежей
+            register_result = payment_client.register_user_wallet(
+                user_id=user_id,
+                user_wallet=user_wallet,
+                deposit_type=f"{days} дней",
+                min_amount=50.0
+            )
+            if register_result.get("success"):
+                logger.info(f"Кошелек пользователя зарегистрирован: {user_wallet}")
+            else:
+                logger.warning(f"Не удалось зарегистрировать кошелек пользователя: {register_result.get('error')}")
         
         if not payment_wallet:
             error_message = f"""❌ **Кошелек для приема платежей не настроен**
@@ -2703,53 +2727,56 @@ https://t.me/your_bot?start={referral_code}
     async def check_deposit_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, days: str, profit: int):
         """Проверить платеж депозита"""
         user_id = update.effective_user.id
-        wallet = context.user_data.get('payment_wallet')
         
-        if not wallet:
-            await update.callback_query.answer("❌ Информация о платеже не найдена")
-            return
+        # Получаем кошелек пользователя
+        user_wallet = self.get_wallet_address(user_id)
         
-        # Проверяем, не истекло ли время
-        payment_time = context.user_data.get('payment_time')
-        if payment_time and datetime.now() - payment_time > timedelta(minutes=5):
-            await update.callback_query.edit_message_text("⏰ Время на оплату истекло")
+        if not user_wallet:
+            await update.callback_query.answer("❌ Кошелек пользователя не найден")
             return
         
         # Показываем индикатор загрузки
-        await update.callback_query.edit_message_text("🔄 Проверяем платеж...")
+        logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
+        await update.callback_query.edit_message_media(
+            media=InputMediaPhoto(media=logo_photo_id, caption="🔄 **Проверяем платеж...**\n\nПожалуйста, подождите...")
+        )
         
         # Импортируем payment_client
         from payment_client import payment_client
         
-        # Проверяем платеж через Payment Bot API
-        result = payment_client.verify_payment(wallet, amount)
+        # Проверяем платеж через Payment Bot API (новая интеграция)
+        result = payment_client.check_payment(user_id, user_wallet)
         
-        if result.get("success") and result.get("confirmed"):
-            # Платеж подтвержден
+        if result.get("success") and result.get("payment_found"):
+            # Платеж найден и подтвержден!
+            payment_amount = result.get('amount', amount)
             tx_hash = result.get('tx_hash', 'N/A')
+            payment_wallet = context.user_data.get('payment_wallet', 'N/A')
             
-            success_message = f"""
-✅ **Платеж подтвержден!**
+            success_message = f"""✅ **ПЛАТЕЖ УСПЕШНО ПОДТВЕРЖДЕН!**
 
-💳 **Депозит:** {amount} USDT на {days} дней ({profit}% прибыль)
-🏦 **Кошелек:** `{wallet}`
-🔗 **Хеш транзакции:** `{tx_hash}`
+💰 Получено: {payment_amount} USDT
+📅 Тип депозита: {days} дней
+📈 Прибыль: {profit}% ({payment_amount * profit / 100:.2f} USDT)
 
-🎉 Депозит успешно создан!
+🔗 **Хеш транзакции:**
+`{tx_hash[:16]}...{tx_hash[-16:] if len(tx_hash) > 32 else ''}`
+
+🎉 Депозит успешно создан и активирован!
             """
             
             keyboard = [
-                [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")]
+                [InlineKeyboardButton("🏠 Выйти в главное меню", callback_data="back_to_menu")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=success_message),
+                media=InputMediaPhoto(media=logo_photo_id, caption=success_message),
                 reply_markup=reply_markup
             )
             
             # Создаем депозит в базе данных
-            await self.create_deposit_in_db(user_id, amount, days, profit, tx_hash)
+            await self.create_deposit_in_db(user_id, payment_amount, days, profit, tx_hash)
             
             # Очищаем данные о платеже
             context.user_data.pop('payment_amount', None)
@@ -2760,29 +2787,34 @@ https://t.me/your_bot?start={referral_code}
             context.user_data.pop('payment_type', None)
             
         else:
-            # Платеж не найден
-            error_message = f"""
-❌ **Платеж не найден**
+            # Платеж еще не поступил
+            payment_wallet = context.user_data.get('payment_wallet', 'N/A')
+            
+            not_found_message = f"""⏳ **ПЛАТЕЖ ЕЩЕ НЕ ПОСТУПИЛ**
 
-💳 **Ожидаемая сумма:** {amount} USDT
-🏦 **Кошелек:** `{wallet}`
+💡 **Проверьте что:**
+• Вы отправили USDT (TRC20)
+• Минимальная сумма: 50 USDT
+• Перевод прошел с вашего кошелька
+• Прошло достаточно времени для подтверждения в блокчейне
 
-💡 **Возможные причины:**
-• Платеж еще не поступил (подождите 1-2 минуты)
-• Неверная сумма
-• Платеж на другой кошелек
+🏦 **Ваш кошелек (отправитель):**
+`{user_wallet}`
 
-🔄 Попробуйте проверить еще раз через минуту
+🏦 **Кошелек для оплаты (получатель):**
+`{payment_wallet}`
+
+💡 Попробуйте проверить через 1-2 минуты.
             """
             
             keyboard = [
-                [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_{amount}_{days}_{profit}")],
-                [InlineKeyboardButton("❌ Отменить", callback_data="cancel_payment")]
+                [InlineKeyboardButton("🔄 Проверить еще раз", callback_data=f"check_deposit_payment_{amount}_{days}_{profit}")],
+                [InlineKeyboardButton("🏠 Назад в главное меню", callback_data="back_to_menu")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=error_message),
+                media=InputMediaPhoto(media=logo_photo_id, caption=not_found_message),
                 reply_markup=reply_markup
             )
 
@@ -2834,225 +2866,110 @@ https://t.me/your_bot?start={referral_code}
             await update.callback_query.answer("❌ Кошелек не настроен")
             return
         
-        # Получаем кошелек для приема платежей из контекста
-        payment_wallet = context.user_data.get('payment_wallet')
-        
-        if not payment_wallet:
-            await update.callback_query.answer("❌ Информация о платеже не найдена")
-            return
-        
         # Показываем индикатор загрузки
-        await update.callback_query.edit_message_text("🔄 Проверяем поступления на кошелек...")
+        logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
+        await update.callback_query.edit_message_media(
+            media=InputMediaPhoto(media=logo_photo_id, caption="🔄 **Проверяем платеж...**\n\nПожалуйста, подождите...")
+        )
         
         # Импортируем payment_client
         from payment_client import payment_client
         
-        # Получаем информацию о переводах с кошелька пользователя
+        # Получаем информацию о переводах с кошелька пользователя (новая интеграция)
         try:
-            # Проверяем переводы с кошелька пользователя
-            payment_info = payment_client.check_user_payments(user_wallet)
+            # Проверяем платеж через Payment Bot API
+            payment_info = payment_client.check_payment(user_id, user_wallet)
             
-            # Если API недоступен, показываем сообщение о ручной проверке
-            if not payment_info.get("success"):
-                fallback_message = f"""⏳ **Проверка платежа**
-
-🏦 **Ваш кошелек:** `{user_wallet}`
-🏦 **Кошелек для перевода:** `{payment_wallet}`
-
-💡 **Система автоматической проверки временно недоступна**
-
-📋 **Что делать:**
-1. Переведите USDT с вашего кошелька на указанный адрес
-2. Сохраните хеш транзакции
-3. Обратитесь к администратору для ручной проверки
-
-⚠️ **Важно:** Переводите только с кошелька `{user_wallet}`"""
+            # Если платеж найден и подтвержден
+            if payment_info.get("success") and payment_info.get("payment_found"):
+                # Платеж подтвержден!
+                payment_amount = payment_info.get('amount')
+                tx_hash = payment_info.get('tx_hash', 'N/A')
+                payment_wallet = context.user_data.get('payment_wallet', 'N/A')
                 
-                keyboard = [
-                    [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=fallback_message),
-                    reply_markup=reply_markup
-                )
-                return
-                error_message = f"""
-❌ **Ошибка получения информации о кошельке**
+                success_message = f"""✅ **ПЛАТЕЖ УСПЕШНО ПОДТВЕРЖДЕН!**
 
-🏦 **Кошелек:** `{payment_wallet}`
+💰 Получено: {payment_amount} USDT
+📅 Тип депозита: {days} дней
+📈 Прибыль: {profit}% ({payment_amount * profit / 100:.2f} USDT)
 
-💡 **Возможные причины:**
-• Кошелек не найден в системе
-• Ошибка соединения с Payment Bot API
-• Кошелек неактивен
+🔗 **Хеш транзакции:**
+`{tx_hash[:16]}...{tx_hash[-16:] if len(tx_hash) > 32 else ''}`
 
-🔄 Попробуйте проверить еще раз через минуту
+🎉 Депозит успешно создан и активирован!
                 """
                 
                 keyboard = [
-                    [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
+                    [InlineKeyboardButton("🏠 Выйти в главное меню", callback_data="back_to_menu")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=error_message),
+                    media=InputMediaPhoto(media=logo_photo_id, caption=success_message),
                     reply_markup=reply_markup
                 )
+                
+                # Создаем депозит в базе данных
+                await self.create_deposit_in_db(user_id, payment_amount, days, profit, tx_hash)
+                
+                # Очищаем данные о платеже
+                context.user_data.pop('payment_wallet', None)
+                context.user_data.pop('deposit_days', None)
+                context.user_data.pop('deposit_profit', None)
+                context.user_data.pop('awaiting_deposit_payment', None)
                 return
-            
-            # Получаем информацию о переводах
-            payments = payment_info.get("payments", [])
-            
-            if not payments:
-                # Нет транзакций
-                no_payment_message = f"""
-❌ **Платежи не найдены**
-
-🏦 **Кошелек:** `{payment_wallet}`
-📅 **Тип депозита:** {days} дней ({profit}% прибыль)
-
-💡 **Что делать:**
-• Убедитесь, что вы перевели средства на указанный кошелек
-• Подождите 1-2 минуты после перевода
-• Проверьте правильность адреса кошелька
-
-🔄 Попробуйте проверить еще раз через минуту
-                """
                 
-                keyboard = [
-                    [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=no_payment_message),
-                    reply_markup=reply_markup
-                )
-                return
+            # Платеж еще не поступил
+            payment_wallet = context.user_data.get('payment_wallet', 'N/A')
             
-            # Находим последний подтвержденный платеж
-            latest_payment = None
-            for payment in payments:
-                if payment.get("confirmed", False):
-                    latest_payment = payment
-                    break
-            
-            if not latest_payment:
-                # Нет подтвержденных входящих транзакций
-                pending_message = f"""
-⏳ **Платеж в обработке**
+            not_found_message = f"""⏳ **ПЛАТЕЖ ЕЩЕ НЕ ПОСТУПИЛ**
 
-🏦 **Кошелек:** `{payment_wallet}`
-📅 **Тип депозита:** {days} дней ({profit}% прибыль)
+💡 **Проверьте что:**
+• Вы отправили USDT (TRC20)
+• Минимальная сумма: 50 USDT
+• Перевод прошел с вашего кошелька
+• Прошло достаточно времени для подтверждения в блокчейне
 
-💡 **Статус:** Платеж получен, но еще не подтвержден
-⏰ **Время подтверждения:** 1-3 минуты
+🏦 **Ваш кошелек (отправитель):**
+`{user_wallet}`
 
-🔄 Попробуйте проверить еще раз через минуту
-                """
-                
-                keyboard = [
-                    [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=pending_message),
-                    reply_markup=reply_markup
-                )
-                return
-            
-            # Платеж найден и подтвержден
-            amount = latest_payment.get("amount", 0)
-            tx_hash = latest_payment.get("tx_hash", "N/A")
-            
-            if amount < 50:
-                # Сумма меньше минимальной
-                low_amount_message = f"""
-❌ **Сумма слишком мала**
+🏦 **Кошелек для оплаты (получатель):**
+`{payment_wallet}`
 
-💳 **Получено:** {amount} USDT
-📅 **Тип депозита:** {days} дней ({profit}% прибыль)
-🏦 **Кошелек:** `{payment_wallet}`
-🔗 **Хеш:** `{tx_hash}`
-
-⚠️ **Минимальная сумма:** 50 USDT
-
-💡 **Что делать:**
-• Доплатите недостающую сумму
-• Или создайте новый депозит с большей суммой
-                """
-                
-                keyboard = [
-                    [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=low_amount_message),
-                    reply_markup=reply_markup
-                )
-                return
-            
-            # Создаем депозит
-            success_message = f"""
-✅ **Платеж подтвержден!**
-
-💳 **Депозит:** {amount} USDT на {days} дней ({profit}% прибыль)
-🏦 **Кошелек:** `{payment_wallet}`
-🔗 **Хеш транзакции:** `{tx_hash}`
-
-🎉 Депозит успешно создан!
+💡 Попробуйте проверить через 1-2 минуты.
             """
             
             keyboard = [
-                [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")]
+                [InlineKeyboardButton("🔄 Проверить еще раз", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
+                [InlineKeyboardButton("🏠 Назад в главное меню", callback_data="back_to_menu")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=success_message),
+                media=InputMediaPhoto(media=logo_photo_id, caption=not_found_message),
                 reply_markup=reply_markup
             )
-            
-            # Создаем депозит в базе данных
-            await self.create_deposit_in_db(user_id, amount, days, profit, tx_hash)
-            
-            # Очищаем данные о платеже
-            context.user_data.pop('deposit_days', None)
-            context.user_data.pop('deposit_profit', None)
-            context.user_data.pop('awaiting_deposit_payment', None)
-            
+                
         except Exception as e:
             logger.error(f"Ошибка проверки платежа: {e}")
             
-            error_message = f"""
-❌ **Ошибка проверки платежа**
+            error_message = f"""❌ **Ошибка проверки платежа**
 
-🏦 **Кошелек:** `{user_wallet}`
-
-💡 **Произошла техническая ошибка. Попробуйте еще раз.**
-
-🔄 Попробуйте проверить еще раз через минуту
+Произошла ошибка при проверке платежа.
+Попробуйте еще раз через минуту.
             """
             
             keyboard = [
                 [InlineKeyboardButton("🔄 Проверить снова", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
+                [InlineKeyboardButton("🏠 Назад в главное меню", callback_data="back_to_menu")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media="AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE", caption=error_message),
+                media=InputMediaPhoto(media=logo_photo_id, caption=error_message),
                 reply_markup=reply_markup
             )
+
 
 if __name__ == "__main__":
     bot = FondklikBot()
