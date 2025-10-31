@@ -1177,8 +1177,9 @@ https://t.me/your_bot?start={referral_code}
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
             try:
+                # Не используем parse_mode, чтобы избежать ошибок парсинга Markdown
                 await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text, parse_mode='Markdown'),
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
                     reply_markup=reply_markup
                 )
                 # Сохраняем message_id
@@ -1188,10 +1189,10 @@ https://t.me/your_bot?start={referral_code}
                 # Если не удалось редактировать медиа, пробуем редактировать подпись (caption)
                 logger.warning(f"Не удалось редактировать медиа в show_referral_info: {type(media_error).__name__}: {media_error}, пробуем caption")
                 try:
+                    # Не используем parse_mode, чтобы избежать ошибок парсинга Markdown
                     await update.callback_query.edit_message_caption(
                         caption=message_text,
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
+                        reply_markup=reply_markup
                     )
                     # Сохраняем message_id
                     if update.callback_query.message:
