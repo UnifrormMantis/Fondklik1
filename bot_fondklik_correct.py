@@ -438,13 +438,20 @@ class FondklikBot:
         """Обработчик нажатий на кнопки"""
         query = update.callback_query
         
+        if not query:
+            logger.error("button_callback: query is None")
+            return
+        
         data = query.data
         logger.info(f"Button callback received: {data}")
         
         # Отвечаем на callback, чтобы убрать индикатор загрузки
         # Но не делаем это для create_deposit_payment, так как там будет свой ответ
-        if not data.startswith("create_deposit_payment_"):
-            await query.answer()
+        try:
+            if not data.startswith("create_deposit_payment_"):
+                await query.answer()
+        except Exception as answer_error:
+            logger.warning(f"Не удалось ответить на callback: {answer_error}")
         
         try:
             if data == "deposit":
@@ -492,8 +499,10 @@ class FondklikBot:
             elif data == "admin_panel":
                 await self.show_admin_panel(update, context)
             elif data == "admin_stats":
+                logger.info(f"Обработка admin_stats для пользователя {update.effective_user.id}")
                 try:
                     await self.show_admin_stats(update, context)
+                    logger.info(f"show_admin_stats выполнена успешно")
                 except Exception as e:
                     logger.error(f"Ошибка при вызове show_admin_stats: {type(e).__name__}: {e}", exc_info=True)
                     try:
@@ -503,8 +512,10 @@ class FondklikBot:
             elif data == "admin_deposit_payments":
                 await self.show_admin_deposit_payments(update, context)
             elif data == "admin_referral_payments":
+                logger.info(f"Обработка admin_referral_payments для пользователя {update.effective_user.id}")
                 try:
                     await self.show_admin_referral_payments(update, context)
+                    logger.info(f"show_admin_referral_payments выполнена успешно")
                 except Exception as e:
                     logger.error(f"Ошибка при вызове show_admin_referral_payments: {type(e).__name__}: {e}", exc_info=True)
                     try:
@@ -512,8 +523,10 @@ class FondklikBot:
                     except Exception:
                         pass
             elif data == "admin_payment_history":
+                logger.info(f"Обработка admin_payment_history для пользователя {update.effective_user.id}")
                 try:
                     await self.show_admin_payment_history(update, context)
+                    logger.info(f"show_admin_payment_history выполнена успешно")
                 except Exception as e:
                     logger.error(f"Ошибка при вызове show_admin_payment_history: {type(e).__name__}: {e}", exc_info=True)
                     try:
