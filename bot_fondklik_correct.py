@@ -855,9 +855,9 @@ class FondklikBot:
             )
             return
         
-        # Получаем активный кошелек из Payment Bot
+        # Получаем активный кошелек из Payment Bot через правильный эндпоинт
         from payment_client import payment_client
-        payment_wallet_result = payment_client.get_active_wallet()
+        payment_wallet_result = payment_client.get_payment_wallet(user_wallet_from_db)
         
         if not payment_wallet_result.get("success"):
             # Если Payment Bot недоступен, используем дефолтный кошелек
@@ -2596,9 +2596,9 @@ https://t.me/your_bot?start={referral_code}
             await update.callback_query.answer("❌ Кошелек не настроен")
             return
         
-        # Получаем активный кошелек из Payment Bot
+        # Получаем активный кошелек из Payment Bot через правильный эндпоинт
         from payment_client import payment_client
-        payment_wallet_result = payment_client.get_active_wallet()
+        payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
         
         if not payment_wallet_result.get("success"):
             # Если Payment Bot недоступен, используем дефолтный кошелек
