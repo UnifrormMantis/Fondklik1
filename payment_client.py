@@ -8,6 +8,10 @@ import requests
 import logging
 import os
 from typing import Dict, Optional, Any
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +81,16 @@ class PaymentClient:
             'X-API-Key': self.api_key,
             'Content-Type': 'application/json'
         }
-        self.api_url = find_payment_bot()
-        # Если URL не найден и есть переменная окружения - используем её
-        if not self.api_url and PAYMENT_API_URL:
-            self.api_url = PAYMENT_API_URL
-            logger.info(f"✅ Используется Payment API из переменной окружения: {PAYMENT_API_URL}")
+        # Сначала пробуем переменную окружения
+        payment_api_url = os.getenv("PAYMENT_API_URL")
+        if payment_api_url:
+            self.api_url = payment_api_url
+            logger.info(f"✅ Используется Payment API из переменной окружения: {payment_api_url}")
+        else:
+            # Если нет переменной - ищем на портах
+            self.api_url = find_payment_bot()
+            if not self.api_url:
+                logger.warning("⚠️ Payment API URL не найден при инициализации. Будет попытка найти при первом вызове.")
     
     def verify_payment(self, wallet_address: str, amount: float, currency: str = "USDT") -> Dict[str, Any]:
         """Проверить платеж на кошелек"""
@@ -132,18 +141,26 @@ class PaymentClient:
         """Получить кошелек для приема платежей"""
         global _cached_api_url
         
+        # Всегда проверяем переменную окружения заново (на случай если она изменилась)
+        payment_api_url = os.getenv("PAYMENT_API_URL")
+        
         # Если API URL не найден, попробуем найти заново
         if not self.api_url:
             # Сначала пробуем переменную окружения
-            if PAYMENT_API_URL:
-                self.api_url = PAYMENT_API_URL
-                logger.info(f"✅ Используется Payment API из переменной окружения: {PAYMENT_API_URL}")
+            if payment_api_url:
+                self.api_url = payment_api_url
+                logger.info(f"✅ Используется Payment API из переменной окружения: {payment_api_url}")
             else:
                 # Ищем на портах
                 self.api_url = find_payment_bot()
             if not self.api_url:
                 logger.error("❌ Payment Bot не найден и переменная PAYMENT_API_URL не установлена")
                 return {"success": False, "error": "Payment Bot не найден"}
+        
+        # Если есть переменная окружения и она отличается - используем её
+        if payment_api_url and self.api_url != payment_api_url:
+            logger.info(f"✅ Обновляем Payment API URL на: {payment_api_url}")
+            self.api_url = payment_api_url
         
         try:
             response = requests.post(
