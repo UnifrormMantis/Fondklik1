@@ -425,7 +425,14 @@ class FondklikBot:
             elif data == "deposit_10":
                 await self.start_deposit_process(update, context, "10", 8)
             elif data == "referral":
-                await self.show_referral_info(update, context)
+                try:
+                    await self.show_referral_info(update, context)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_referral_info: {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data == "my_deposits":
                 await self.show_my_deposits(update, context)
             elif data == "wallet":
@@ -1030,44 +1037,79 @@ class FondklikBot:
 
     async def show_referral_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать информацию о реферальной системе"""
-        user = update.effective_user
-        
-        with sqlite3.connect(DATABASE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT referral_code FROM users WHERE telegram_id = ?', (user.id,))
-            result = cursor.fetchone()
-            referral_code = result[0] if result else f"REF{user.id}"
-        
-        # Получаем детальную статистику рефералов
-        stats = self.get_detailed_referral_stats(user.id)
-        
-        # Получаем доступный баланс для вывода
-        with sqlite3.connect(DATABASE_PATH) as conn:
-            cursor = conn.cursor()
+        try:
+            # Проверяем, что callback_query существует
+            if not update.callback_query:
+                logger.error("update.callback_query is None в show_referral_info")
+                return
             
-            # Получаем общий заработанный баланс
-            cursor.execute('''
-                SELECT COALESCE(SUM(amount), 0) 
-                FROM referral_payments 
-                WHERE referrer_id = ?
-            ''', (user.id,))
-            total_earned = cursor.fetchone()[0] or 0.0
+            user = update.effective_user
             
-            # Получаем уже выведенные средства
-            cursor.execute('''
-                SELECT COALESCE(SUM(amount), 0) 
-                FROM referral_withdrawals 
-                WHERE user_id = ? AND status = 'completed'
-            ''', (user.id,))
-            total_withdrawn = cursor.fetchone()[0] or 0.0
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT referral_code FROM users WHERE telegram_id = ?', (user.id,))
+                result = cursor.fetchone()
+                referral_code = result[0] if result else f"REF{user.id}"
             
-            # Доступный баланс = заработано - выведено
-            available_balance = total_earned - total_withdrawn
-        
-        message_text = f"""👥 РЕФЕРАЛЬНАЯ СИСТЕМА
+            # Получаем детальную статистику рефералов
+            try:
+                stats = self.get_detailed_referral_stats(user.id)
+                # Заполняем значения по умолчанию, если ключи отсутствуют
+                stats.setdefault('total_registered', 0)
+                stats.setdefault('active_30_level_1', 0)
+                stats.setdefault('active_30_level_2', 0)
+                stats.setdefault('active_30_level_3', 0)
+                stats.setdefault('active_10_level_1', 0)
+                stats.setdefault('active_10_level_2', 0)
+                stats.setdefault('active_10_level_3', 0)
+            except Exception as stats_error:
+                logger.error(f"Ошибка получения статистики рефералов: {stats_error}", exc_info=True)
+                # Используем значения по умолчанию
+                stats = {
+                    'total_registered': 0,
+                    'active_30_level_1': 0,
+                    'active_30_level_2': 0,
+                    'active_30_level_3': 0,
+                    'active_10_level_1': 0,
+                    'active_10_level_2': 0,
+                    'active_10_level_3': 0
+                }
+            
+            # Получаем доступный баланс для вывода
+            try:
+                with sqlite3.connect(DATABASE_PATH) as conn:
+                    cursor = conn.cursor()
+                    
+                    # Получаем общий заработанный баланс
+                    cursor.execute('''
+                        SELECT COALESCE(SUM(amount), 0) 
+                        FROM referral_payments 
+                        WHERE referrer_id = ?
+                    ''', (user.id,))
+                    total_earned = cursor.fetchone()[0] or 0.0
+                    
+                    # Получаем уже выведенные средства
+                    cursor.execute('''
+                        SELECT COALESCE(SUM(amount), 0) 
+                        FROM referral_withdrawals 
+                        WHERE user_id = ? AND status = 'completed'
+                    ''', (user.id,))
+                    total_withdrawn = cursor.fetchone()[0] or 0.0
+                    
+                    # Доступный баланс = заработано - выведено
+                    available_balance = total_earned - total_withdrawn
+            except Exception as balance_error:
+                logger.error(f"Ошибка получения баланса: {balance_error}", exc_info=True)
+                total_earned = 0.0
+                available_balance = 0.0
+            
+            # Экранируем значения для Markdown
+            referral_code_safe = str(referral_code).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
+            
+            message_text = f"""👥 РЕФЕРАЛЬНАЯ СИСТЕМА
 
 🔗 Ссылка для приглашения:
-https://t.me/your_bot?start={referral_code}
+https://t.me/your_bot?start={referral_code_safe}
 
 📊 Статистика:
 • Всего зарегистрировано: {stats['total_registered']} чел.
@@ -1087,44 +1129,57 @@ https://t.me/your_bot?start={referral_code}
 💵 Общий доход: {total_earned:.2f} USDT
 💰 Доступно к выводу: {available_balance:.2f} USDT"""
         
-        keyboard = [
-            [InlineKeyboardButton("💰 Вывод средств", callback_data="withdraw_referral")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # ID фото логотипа ФондКлик
-        logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
-        
-        try:
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=message_text, parse_mode='Markdown'),
-                reply_markup=reply_markup
-            )
-            # Сохраняем message_id
-            if update.callback_query.message:
-                context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
-        except Exception as media_error:
-            # Если не удалось редактировать медиа, пробуем редактировать подпись (caption)
-            logger.warning(f"Не удалось редактировать медиа в show_referral_info: {type(media_error).__name__}: {media_error}, пробуем caption")
+            keyboard = [
+                [InlineKeyboardButton("💰 Вывод средств", callback_data="withdraw_referral")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # ID фото логотипа ФондКлик
+            logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
+            
             try:
-                await update.callback_query.edit_message_caption(
-                    caption=message_text,
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text, parse_mode='Markdown'),
+                    reply_markup=reply_markup
                 )
                 # Сохраняем message_id
                 if update.callback_query.message:
                     context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
-            except Exception as caption_error:
-                logger.error(f"Ошибка редактирования подписи в show_referral_info: {type(caption_error).__name__}: {caption_error}")
+            except Exception as media_error:
+                # Если не удалось редактировать медиа, пробуем редактировать подпись (caption)
+                logger.warning(f"Не удалось редактировать медиа в show_referral_info: {type(media_error).__name__}: {media_error}, пробуем caption")
                 try:
+                    await update.callback_query.edit_message_caption(
+                        caption=message_text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                    # Сохраняем message_id
+                    if update.callback_query.message:
+                        context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+                except Exception as caption_error:
+                    logger.error(f"Ошибка редактирования подписи в show_referral_info: {type(caption_error).__name__}: {caption_error}", exc_info=True)
+                    try:
+                        await update.callback_query.answer(
+                            "❌ Ошибка отображения. Попробуйте еще раз.",
+                            show_alert=True
+                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            error_type = type(e).__name__
+            error_message = str(e)
+            logger.error(f"Критическая ошибка в show_referral_info: {error_type}: {error_message}", exc_info=True)
+            logger.error(f"Traceback: {repr(e.__traceback__)}")
+            try:
+                if update and update.callback_query:
                     await update.callback_query.answer(
-                        "❌ Ошибка отображения. Попробуйте еще раз.",
+                        f"❌ Ошибка: {error_type}. Попробуйте еще раз.",
                         show_alert=True
                     )
-                except Exception:
-                    pass
+            except Exception as answer_error:
+                logger.error(f"Не удалось отправить ответ об ошибке: {answer_error}")
 
     async def show_my_deposits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать депозиты пользователя"""
