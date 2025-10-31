@@ -1978,10 +1978,16 @@ https://t.me/your_bot?start={referral_code}
 
     async def show_admin_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать админскую статистику"""
+        logger.info(f"show_admin_stats вызвана для пользователя {update.effective_user.id if update.effective_user else 'None'}")
         user = update.effective_user
+        
+        if not update.callback_query:
+            logger.error("show_admin_stats: callback_query is None")
+            return
         
         # Проверяем админские права
         if not self.is_admin(user.id):
+            logger.warning(f"show_admin_stats: пользователь {user.id} не является админом")
             await update.callback_query.answer("❌ У вас нет прав администратора")
             return
         
@@ -2237,10 +2243,16 @@ https://t.me/your_bot?start={referral_code}
 
     async def show_admin_referral_payments(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать управление выплатами рефералов"""
+        logger.info(f"show_admin_referral_payments вызвана для пользователя {update.effective_user.id if update.effective_user else 'None'}")
         user = update.effective_user
+        
+        if not update.callback_query:
+            logger.error("show_admin_referral_payments: callback_query is None")
+            return
         
         # Проверяем админские права
         if not self.is_admin(user.id):
+            logger.warning(f"show_admin_referral_payments: пользователь {user.id} не является админом")
             await update.callback_query.answer("❌ У вас нет прав администратора")
             return
         
@@ -2360,10 +2372,16 @@ https://t.me/your_bot?start={referral_code}
 
     async def show_admin_payment_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать историю выплат"""
+        logger.info(f"show_admin_payment_history вызвана для пользователя {update.effective_user.id if update.effective_user else 'None'}")
         user = update.effective_user
+        
+        if not update.callback_query:
+            logger.error("show_admin_payment_history: callback_query is None")
+            return
         
         # Проверяем админские права
         if not self.is_admin(user.id):
+            logger.warning(f"show_admin_payment_history: пользователь {user.id} не является админом")
             await update.callback_query.answer("❌ У вас нет прав администратора")
             return
         
