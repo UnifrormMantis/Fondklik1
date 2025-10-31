@@ -78,6 +78,10 @@ class PaymentClient:
             'Content-Type': 'application/json'
         }
         self.api_url = find_payment_bot()
+        # Если URL не найден и есть переменная окружения - используем её
+        if not self.api_url and PAYMENT_API_URL:
+            self.api_url = PAYMENT_API_URL
+            logger.info(f"✅ Используется Payment API из переменной окружения: {PAYMENT_API_URL}")
     
     def verify_payment(self, wallet_address: str, amount: float, currency: str = "USDT") -> Dict[str, Any]:
         """Проверить платеж на кошелек"""
@@ -130,8 +134,15 @@ class PaymentClient:
         
         # Если API URL не найден, попробуем найти заново
         if not self.api_url:
-            self.api_url = find_payment_bot()
+            # Сначала пробуем переменную окружения
+            if PAYMENT_API_URL:
+                self.api_url = PAYMENT_API_URL
+                logger.info(f"✅ Используется Payment API из переменной окружения: {PAYMENT_API_URL}")
+            else:
+                # Ищем на портах
+                self.api_url = find_payment_bot()
             if not self.api_url:
+                logger.error("❌ Payment Bot не найден и переменная PAYMENT_API_URL не установлена")
                 return {"success": False, "error": "Payment Bot не найден"}
         
         try:
