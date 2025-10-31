@@ -492,25 +492,74 @@ class FondklikBot:
             elif data == "admin_panel":
                 await self.show_admin_panel(update, context)
             elif data == "admin_stats":
-                await self.show_admin_stats(update, context)
+                try:
+                    await self.show_admin_stats(update, context)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_stats: {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data == "admin_deposit_payments":
                 await self.show_admin_deposit_payments(update, context)
             elif data == "admin_referral_payments":
-                await self.show_admin_referral_payments(update, context)
+                try:
+                    await self.show_admin_referral_payments(update, context)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_referral_payments: {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data == "admin_payment_history":
-                await self.show_admin_payment_history(update, context)
+                try:
+                    await self.show_admin_payment_history(update, context)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_payment_history: {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data == "admin_test_payment_api":
                 await self.test_payment_api(update, context)
             elif data == "admin_deposit_payment_history":
-                await self.show_admin_deposit_payment_history(update, context, 0)
+                try:
+                    await self.show_admin_deposit_payment_history(update, context, 0)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_deposit_payment_history: {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data.startswith("deposit_history_page_"):
-                page = int(data.split("_")[3])
-                await self.show_admin_deposit_payment_history(update, context, page)
+                try:
+                    page = int(data.split("_")[3])
+                    await self.show_admin_deposit_payment_history(update, context, page)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_deposit_payment_history (page): {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data == "admin_referral_payment_history":
-                await self.show_admin_referral_payment_history(update, context, 0)
+                try:
+                    await self.show_admin_referral_payment_history(update, context, 0)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_referral_payment_history: {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data.startswith("referral_history_page_"):
-                page = int(data.split("_")[3])
-                await self.show_admin_referral_payment_history(update, context, page)
+                try:
+                    page = int(data.split("_")[3])
+                    await self.show_admin_referral_payment_history(update, context, page)
+                except Exception as e:
+                    logger.error(f"Ошибка при вызове show_admin_referral_payment_history (page): {type(e).__name__}: {e}", exc_info=True)
+                    try:
+                        await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             elif data == "admin_pending_deposit_payments":
                 await self.show_admin_pending_deposit_payments(update, context)
             elif data == "admin_pending_referral_payments":
@@ -2011,14 +2060,35 @@ https://t.me/your_bot?start={referral_code}
             # ID фото логотипа ФондКлик
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                reply_markup=reply_markup
-            )
+            try:
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
+                    reply_markup=reply_markup
+                )
+                if update.callback_query.message:
+                    context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+            except Exception as media_error:
+                logger.warning(f"Не удалось редактировать медиа в show_admin_stats: {type(media_error).__name__}: {media_error}, пробуем caption")
+                try:
+                    await update.callback_query.edit_message_caption(
+                        caption=message_text,
+                        reply_markup=reply_markup
+                    )
+                    if update.callback_query.message:
+                        context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+                except Exception as caption_error:
+                    logger.error(f"Ошибка редактирования подписи в show_admin_stats: {type(caption_error).__name__}: {caption_error}", exc_info=True)
+                    try:
+                        await update.callback_query.answer("❌ Ошибка отображения. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             
         except Exception as e:
-            logger.error(f"Ошибка получения статистики: {e}")
-            await update.callback_query.answer("❌ Ошибка получения статистики")
+            logger.error(f"Ошибка получения статистики: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                await update.callback_query.answer("❌ Ошибка получения статистики", show_alert=True)
+            except Exception:
+                pass
 
     async def show_admin_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать меню поиска пользователей"""
@@ -2193,26 +2263,39 @@ https://t.me/your_bot?start={referral_code}
                 ''')
                 pending_referrals = cursor.fetchone()[0]
             
-            # Получаем статистику на сегодня
-            today = datetime.now().strftime('%Y-%m-%d')
-            cursor.execute('''
-                SELECT COUNT(*), COALESCE(SUM(amount), 0) 
-                FROM referral_withdrawals 
-                WHERE DATE(created_at) = ? AND status = 'pending'
-            ''', (today,))
-            today_count, today_sum = cursor.fetchone()
+                # Получаем статистику на сегодня
+                today = datetime.now().strftime('%Y-%m-%d')
+                cursor.execute('''
+                    SELECT COUNT(*), COALESCE(SUM(amount), 0) 
+                    FROM referral_withdrawals 
+                    WHERE DATE(created_at) = ? AND status = 'pending'
+                ''', (today,))
+                today_result = cursor.fetchone()
+                today_count = today_result[0] if today_result else 0
+                today_sum = today_result[1] if today_result and today_result[1] else 0.0
             
-            message_text = """
+            # Проверяем, есть ли данные
+            has_payments = any(stat['count'] > 0 for stat in daily_stats) or pending_referrals > 0
+            
+            if not has_payments:
+                message_text = """
+🎁 УПРАВЛЕНИЕ ВЫПЛАТАМИ РЕФЕРАЛОВ
+
+📭 Здесь пока пусто
+
+Ожидающие выплаты рефералов отсутствуют. Здесь будут отображаться заявки на вывод реферальных средств."""
+            else:
+                message_text = """
 🎁 УПРАВЛЕНИЕ ВЫПЛАТАМИ РЕФЕРАЛОВ
 
 📊 Статистика по дням (последние 30 дней):
 """
-            
-            for stat in daily_stats:
-                if stat['count'] > 0:  # Показываем только дни с выплатами
-                    message_text += f"\n{stat['date']}/{stat['count']}/{stat['sum']:.0f}$"
-            
-            message_text += f"""
+                
+                for stat in daily_stats:
+                    if stat['count'] > 0:  # Показываем только дни с выплатами
+                        message_text += f"\n{stat['date']}/{stat['count']}/{stat['sum']:.0f}$"
+                
+                message_text += f"""
 
 📅 Сегодня кол-во заявок: {today_count}; общ. сумма: {today_sum:.0f}$
 
@@ -2231,14 +2314,35 @@ https://t.me/your_bot?start={referral_code}
             # ID фото логотипа ФондКлик
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                reply_markup=reply_markup
-            )
+            try:
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
+                    reply_markup=reply_markup
+                )
+                if update.callback_query.message:
+                    context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+            except Exception as media_error:
+                logger.warning(f"Не удалось редактировать медиа в show_admin_referral_payments: {type(media_error).__name__}: {media_error}, пробуем caption")
+                try:
+                    await update.callback_query.edit_message_caption(
+                        caption=message_text,
+                        reply_markup=reply_markup
+                    )
+                    if update.callback_query.message:
+                        context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+                except Exception as caption_error:
+                    logger.error(f"Ошибка редактирования подписи в show_admin_referral_payments: {type(caption_error).__name__}: {caption_error}", exc_info=True)
+                    try:
+                        await update.callback_query.answer("❌ Ошибка отображения. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             
         except Exception as e:
-            logger.error(f"Ошибка получения данных о выплатах рефералов: {e}")
-            await update.callback_query.answer("❌ Ошибка получения данных")
+            logger.error(f"Ошибка получения данных о выплатах рефералов: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                await update.callback_query.answer("❌ Ошибка получения данных", show_alert=True)
+            except Exception:
+                pass
 
 
     async def show_admin_payment_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2318,25 +2422,36 @@ https://t.me/your_bot?start={referral_code}
             
             # Формируем сообщение (расширенный формат с полным адресом кошелька)
             total_pages = (max_records + 3) // 4  # Пересчитываем страницы для 4 записей на страницу
-            message_text = f"""💰 ИСТОРИЯ ВЫПЛАТ ВКЛАДОВ
+            
+            # Проверяем, есть ли данные
+            if not deposits or len(deposits) == 0:
+                message_text = f"""💰 ИСТОРИЯ ВЫПЛАТ ВКЛАДОВ
+
+📊 Всего выплат: {total_deposits} | Выплачено: {total_payouts:.0f}$
+
+📭 Здесь пока пусто
+
+История выплат вкладов пуста. Здесь будут отображаться все выполненные выплаты по депозитам."""
+            else:
+                message_text = f"""💰 ИСТОРИЯ ВЫПЛАТ ВКЛАДОВ
 
 📊 Показано: {max_records} из {total_deposits} | Выплачено: {total_payouts:.0f}$ | Стр. {page + 1}/{total_pages}:
 """
-            
-            for i, deposit in enumerate(deposits):
-                payout_amount, status, created_at, first_name, username, wallet_address = deposit
-                # Полный адрес кошелька на отдельной строке
-                wallet_full = wallet_address or 'N/A'
-                date_str = created_at[:10] if created_at else 'N/A'
                 
-                # Обратная нумерация: самые старые записи имеют номер 1
-                # max_records - (offset + i) дает обратный порядок
-                unique_number = max_records - (offset + i)
-                
-                # Формат: уникальный номер, сумма выплаты, имя, дата на одной строке, кошелек на отдельной строке
-                message_text += f"\n{unique_number}. ✅ {payout_amount:.0f}$ | {first_name} | {date_str}"
-                message_text += f"\n💳 {wallet_full}"
-                message_text += "\n"  # Пустая строка для разделения
+                for i, deposit in enumerate(deposits):
+                    payout_amount, status, created_at, first_name, username, wallet_address = deposit
+                    # Полный адрес кошелька на отдельной строке
+                    wallet_full = wallet_address or 'N/A'
+                    date_str = created_at[:10] if created_at else 'N/A'
+                    
+                    # Обратная нумерация: самые старые записи имеют номер 1
+                    # max_records - (offset + i) дает обратный порядок
+                    unique_number = max_records - (offset + i)
+                    
+                    # Формат: уникальный номер, сумма выплаты, имя, дата на одной строке, кошелек на отдельной строке
+                    message_text += f"\n{unique_number}. ✅ {payout_amount:.0f}$ | {first_name} | {date_str}"
+                    message_text += f"\n💳 {wallet_full}"
+                    message_text += "\n"  # Пустая строка для разделения
             
             # Формируем клавиатуру с пагинацией
             keyboard = []
@@ -2366,14 +2481,35 @@ https://t.me/your_bot?start={referral_code}
             # ID фото логотипа ФондКлик
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                reply_markup=reply_markup
-            )
+            try:
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
+                    reply_markup=reply_markup
+                )
+                if update.callback_query.message:
+                    context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+            except Exception as media_error:
+                logger.warning(f"Не удалось редактировать медиа в show_admin_deposit_payment_history: {type(media_error).__name__}: {media_error}, пробуем caption")
+                try:
+                    await update.callback_query.edit_message_caption(
+                        caption=message_text,
+                        reply_markup=reply_markup
+                    )
+                    if update.callback_query.message:
+                        context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+                except Exception as caption_error:
+                    logger.error(f"Ошибка редактирования подписи в show_admin_deposit_payment_history: {type(caption_error).__name__}: {caption_error}", exc_info=True)
+                    try:
+                        await update.callback_query.answer("❌ Ошибка отображения. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             
         except Exception as e:
-            logger.error(f"Ошибка получения истории выплат вкладов: {e}")
-            await update.callback_query.answer("❌ Ошибка получения истории")
+            logger.error(f"Ошибка получения истории выплат вкладов: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                await update.callback_query.answer("❌ Ошибка получения истории", show_alert=True)
+            except Exception:
+                pass
 
     async def show_admin_referral_payment_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
         """Показать историю выплат рефералов"""
@@ -2413,17 +2549,28 @@ https://t.me/your_bot?start={referral_code}
                 # Рассчитываем общее количество страниц
                 total_pages = (total_withdrawals + limit - 1) // limit
             
-            message_text = f"""
+            # Проверяем, есть ли данные
+            if not withdrawals or len(withdrawals) == 0:
+                message_text = f"""
+🎁 ИСТОРИЯ ВЫПЛАТ РЕФЕРАЛОВ
+
+📊 Всего выплат: {total_withdrawals} | Сумма: {total_amount:.0f}$
+
+📭 Здесь пока пусто
+
+История выплат рефералов пуста. Здесь будут отображаться все выполненные выплаты по реферальным бонусам."""
+            else:
+                message_text = f"""
 🎁 ИСТОРИЯ ВЫПЛАТ РЕФЕРАЛОВ
 
 📊 Всего выплат: {total_withdrawals} | Сумма: {total_amount:.0f}$ | Стр. {page + 1}/{total_pages}:
 """
-            
-            for i, withdrawal in enumerate(withdrawals):
-                amount, created_at, first_name, username, wallet_address = withdrawal
-                # Нумерация с учетом страницы
-                unique_number = offset + i + 1
-                message_text += f"\n{unique_number}. ✅ {amount:.0f}$ | {first_name} | {wallet_address or 'N/A'} | {created_at[:10]}"
+                
+                for i, withdrawal in enumerate(withdrawals):
+                    amount, created_at, first_name, username, wallet_address = withdrawal
+                    # Нумерация с учетом страницы
+                    unique_number = offset + i + 1
+                    message_text += f"\n{unique_number}. ✅ {amount:.0f}$ | {first_name} | {wallet_address or 'N/A'} | {created_at[:10]}"
             
             # Создаем кнопки пагинации
             keyboard = []
@@ -2446,14 +2593,35 @@ https://t.me/your_bot?start={referral_code}
             # ID фото логотипа ФондКлик
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                reply_markup=reply_markup
-            )
+            try:
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
+                    reply_markup=reply_markup
+                )
+                if update.callback_query.message:
+                    context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+            except Exception as media_error:
+                logger.warning(f"Не удалось редактировать медиа в show_admin_referral_payment_history: {type(media_error).__name__}: {media_error}, пробуем caption")
+                try:
+                    await update.callback_query.edit_message_caption(
+                        caption=message_text,
+                        reply_markup=reply_markup
+                    )
+                    if update.callback_query.message:
+                        context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
+                except Exception as caption_error:
+                    logger.error(f"Ошибка редактирования подписи в show_admin_referral_payment_history: {type(caption_error).__name__}: {caption_error}", exc_info=True)
+                    try:
+                        await update.callback_query.answer("❌ Ошибка отображения. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass
             
         except Exception as e:
-            logger.error(f"Ошибка получения истории выплат рефералов: {e}")
-            await update.callback_query.answer("❌ Ошибка получения истории")
+            logger.error(f"Ошибка получения истории выплат рефералов: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                await update.callback_query.answer("❌ Ошибка получения истории", show_alert=True)
+            except Exception:
+                pass
 
     async def show_admin_pending_deposit_payments(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать ожидающие выплаты депозитов"""
