@@ -19,11 +19,20 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from payment_handlers import register_payment_handlers, start_auto_payment_checker
 
 # Настройка логирования
+import sys
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Вывод в stdout для systemd
+        logging.StreamHandler(sys.stderr)    # Вывод в stderr для systemd
+    ],
+    force=True  # Перезаписываем существующую конфигурацию
 )
 logger = logging.getLogger(__name__)
+# Отключаем буферизацию для немедленного вывода логов
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, 'reconfigure') else None
 
 # Константы
 DATABASE_PATH = "bot_database.db"
@@ -416,10 +425,22 @@ class FondklikBot:
                 await self.create_payment(update, context, amount)
             elif data.startswith("create_deposit_payment_"):
                 # Обработка создания платежа для депозита
-                parts = data.split("_")
-                days = parts[3]
-                profit = int(parts[4])
-                await self.create_deposit_payment(update, context, days, profit)
+                try:
+                    parts = data.split("_")
+                    if len(parts) >= 5:
+                        days = parts[3]
+                        profit = int(parts[4])
+                        logger.info(f"Парсинг create_deposit_payment: days={days}, profit={profit}")
+                        await self.create_deposit_payment(update, context, days, profit)
+                    else:
+                        logger.error(f"Неверный формат callback_data: {data}, parts={parts}")
+                        await query.answer("❌ Ошибка формата данных. Попробуйте еще раз.", show_alert=True)
+                except (ValueError, IndexError) as e:
+                    logger.error(f"Ошибка парсинга create_deposit_payment: {e}, data={data}", exc_info=True)
+                    await query.answer("❌ Ошибка обработки запроса. Попробуйте еще раз.", show_alert=True)
+                except Exception as e:
+                    logger.error(f"Неожиданная ошибка в create_deposit_payment обработчике: {e}", exc_info=True)
+                    await query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
             elif data.startswith("deposit_amount_"):
                 # Обработка выбора суммы депозита
                 parts = data.split("_")
@@ -2583,35 +2604,50 @@ https://t.me/your_bot?start={referral_code}
     async def create_deposit_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, days: str, profit: int):
         """Создать платеж для депозита"""
         try:
+            # Проверяем, что callback_query существует
+            if not update.callback_query:
+                logger.error("update.callback_query is None")
+                return
+            
             user_id = update.effective_user.id
+            logger.info(f"Создание платежа для пользователя {user_id}, депозит: {days} дней")
             
             # Получаем кошелек пользователя (для проверки, что он настроен)
             user_wallet = self.get_wallet_address(user_id)
+            logger.info(f"Кошелек пользователя: {user_wallet}")
             
             if not user_wallet:
                 await update.callback_query.answer("❌ Кошелек не настроен")
+                logger.warning(f"Пользователь {user_id} пытается создать депозит без кошелька")
                 return
             
             # Получаем активный кошелек из Payment Bot через правильный эндпоинт
+            payment_wallet_addr = "TPersistenceTest123456789012345678901234"  # Дефолтное значение
             try:
                 from payment_client import payment_client
+                
+                # Проверяем, что payment_client инициализирован
+                if not payment_client:
+                    logger.error("payment_client не инициализирован")
+                    raise ImportError("payment_client не найден")
+                
                 payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
                 
                 logger.info(f"DEBUG: payment_wallet_result = {payment_wallet_result}")
                 
                 if not payment_wallet_result:
-                    payment_wallet_addr = "TPersistenceTest123456789012345678901234"
                     logger.warning(f"Payment Bot вернул None, используется дефолтный кошелек: {payment_wallet_addr}")
                 elif not payment_wallet_result.get("success", False):
                     # Если Payment Bot недоступен, используем дефолтный кошелек
-                    payment_wallet_addr = "TPersistenceTest123456789012345678901234"
                     logger.warning(f"Payment Bot недоступен или ошибка: {payment_wallet_result}, используется дефолтный кошелек: {payment_wallet_addr}")
                 else:
-                    payment_wallet_addr = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
+                    payment_wallet_addr = payment_wallet_result.get("wallet_address", payment_wallet_addr)
                     logger.info(f"✅ Получен активный кошелек из Payment Bot: {payment_wallet_addr}")
+            except ImportError as ie:
+                logger.error(f"Ошибка импорта payment_client: {type(ie).__name__}: {ie}", exc_info=True)
+                logger.warning(f"Используется дефолтный кошелек из-за ошибки импорта: {payment_wallet_addr}")
             except Exception as e:
                 logger.error(f"Ошибка получения кошелька из Payment Bot: {type(e).__name__}: {e}", exc_info=True)
-                payment_wallet_addr = "TPersistenceTest123456789012345678901234"
                 logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet_addr}")
             
             payment_wallet = payment_wallet_addr
@@ -2643,12 +2679,18 @@ https://t.me/your_bot?start={referral_code}
             context.user_data['payment_wallet'] = payment_wallet
             
             # Показываем инструкции для внесения средств
+            # Экранируем переменные для безопасности (но кошелек в backticks не нужно экранировать)
+            days_safe = str(days).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
+            profit_safe = str(profit)
+            # Кошелек в backticks не нужно экранировать - backticks защищают от Markdown
+            wallet_safe = str(payment_wallet) if payment_wallet else "НЕ УКАЗАН"
+            
             message_text = f"""💳 ВНЕСЕНИЕ СРЕДСТВ НА ДЕПОЗИТ
 
-📅 Тип депозита: {days} дней ({profit}% прибыль)
+📅 Тип депозита: {days_safe} дней ({profit_safe}% прибыль)
 
 🏦 **Адрес для перевода:**
-`{payment_wallet}`
+`{wallet_safe}`
 
 💰 **Переведите любую сумму на указанный кошелек**
 
@@ -2662,8 +2704,12 @@ https://t.me/your_bot?start={referral_code}
 2. После перевода нажмите "✅ Проверить платеж"
 3. Система автоматически создает депозит на полученную сумму"""
             
+            # Убеждаемся, что days и profit безопасны для callback_data
+            days_callback = str(days).replace('_', '-').replace(' ', '-')
+            profit_callback = str(profit)
+            
             keyboard = [
-                [InlineKeyboardButton("✅ Проверить платеж", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
+                [InlineKeyboardButton("✅ Проверить платеж", callback_data=f"check_deposit_payment_auto_{days_callback}_{profit_callback}")],
                 [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
             ]
             
@@ -2671,10 +2717,15 @@ https://t.me/your_bot?start={referral_code}
             
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
+            # Логируем что отправляем
+            logger.info(f"Отправляем сообщение с кошельком: {payment_wallet}")
+            logger.info(f"Длина message_text: {len(message_text)} символов")
+            
             try:
                 await update.callback_query.edit_message_media(
                     media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
                 )
             except Exception as media_error:
                 # Если не удалось редактировать медиа, пробуем редактировать как текст
@@ -2688,23 +2739,71 @@ https://t.me/your_bot?start={referral_code}
                 except Exception as text_error:
                     # Если и это не работает, отправляем новое сообщение
                     logger.warning(f"Не удалось редактировать текст: {text_error}, отправляем новое сообщение")
-                    await update.callback_query.answer()
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=logo_photo_id,
-                        caption=message_text,
-                        reply_markup=reply_markup,
-                        parse_mode='Markdown'
-                    )
+                    try:
+                        await update.callback_query.answer()
+                    except Exception:
+                        pass  # Игнорируем ошибки ответа на callback
+                    
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=logo_photo_id,
+                            caption=message_text,
+                            reply_markup=reply_markup,
+                            parse_mode='Markdown'
+                        )
+                    except Exception as send_error:
+                        logger.error(f"Не удалось отправить новое сообщение: {send_error}")
+                        # Последняя попытка - просто текстовое сообщение
+                        try:
+                            await context.bot.send_message(
+                                chat_id=update.effective_chat.id,
+                                text=message_text,
+                                reply_markup=reply_markup,
+                                parse_mode='Markdown'
+                            )
+                        except Exception as final_send_error:
+                            logger.error(f"Критическая ошибка отправки сообщения: {final_send_error}", exc_info=True)
+                            # Всё провалилось - хотя бы ответим на callback
+                            try:
+                                await update.callback_query.answer(
+                                    "❌ Ошибка отображения. Попробуйте еще раз.",
+                                    show_alert=True
+                                )
+                            except Exception:
+                                pass
         except Exception as e:
-            logger.error(f"Критическая ошибка в create_deposit_payment: {type(e).__name__}: {e}", exc_info=True)
+            error_type = type(e).__name__
+            error_message = str(e)
+            logger.error(f"Критическая ошибка в create_deposit_payment: {error_type}: {error_message}", exc_info=True)
+            
+            # Пытаемся показать ошибку пользователю
             try:
-                error_msg = f"❌ Произошла ошибка при создании платежа.\n\nОшибка: {type(e).__name__}\n\nПопробуйте еще раз."
-                await update.callback_query.answer(error_msg, show_alert=True)
-                # Пытаемся вернуть в меню депозитов
-                await self.show_deposit_menu(update, context)
+                if update and update.callback_query:
+                    try:
+                        await update.callback_query.answer("❌ Произошла ошибка. Попробуйте еще раз.", show_alert=True)
+                    except Exception:
+                        pass  # Игнорируем ошибки ответа на callback
+                    
+                    # Пытаемся вернуться в меню депозитов
+                    try:
+                        await self.show_deposit_options(update, context)
+                    except Exception as menu_error:
+                        logger.error(f"Не удалось показать меню депозитов: {menu_error}")
+                        # Последняя попытка - текстовое сообщение
+                        try:
+                            if update.effective_message:
+                                await update.effective_message.reply_text(
+                                    "❌ Произошла ошибка при создании платежа.\n\nПопробуйте еще раз через несколько секунд."
+                                )
+                        except Exception:
+                            pass
+                elif update and update.effective_message:
+                    await update.effective_message.reply_text(
+                        "❌ Произошла ошибка при создании платежа.\n\nПопробуйте еще раз."
+                    )
             except Exception as final_error:
-                logger.error(f"Не удалось обработать ошибку: {final_error}", exc_info=True)
+                logger.error(f"Не удалось обработать ошибку для пользователя: {final_error}", exc_info=True)
 
     async def process_deposit_payment_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, days: str, profit: int):
         """Обработать платеж для депозита"""
