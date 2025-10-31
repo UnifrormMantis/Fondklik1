@@ -20,19 +20,48 @@ from payment_handlers import register_payment_handlers, start_auto_payment_check
 
 # Настройка логирования
 import sys
+from logging.handlers import RotatingFileHandler
+
+# Создаем директорию для логов, если её нет
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
+# Файл для общих логов
+log_file = os.path.join(log_dir, 'bot.log')
+# Файл для ошибок (для быстрого доступа)
+error_log_file = os.path.join(log_dir, 'bot_errors.log')
+
+# Настройка формата логов
+log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+date_format = '%Y-%m-%d %H:%M:%S'
+
+# Создаем обработчики
+handlers = [
+    logging.StreamHandler(sys.stdout),  # Вывод в stdout для systemd
+    logging.StreamHandler(sys.stderr),   # Вывод в stderr для systemd
+    RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5),  # Общие логи
+]
+
+# Обработчик только для ошибок (для быстрого доступа)
+error_handler = RotatingFileHandler(error_log_file, maxBytes=5*1024*1024, backupCount=3)
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(logging.Formatter(log_format, date_format))
+handlers.append(error_handler)
+
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format=log_format,
+    datefmt=date_format,
     level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(sys.stdout),  # Вывод в stdout для systemd
-        logging.StreamHandler(sys.stderr)    # Вывод в stderr для systemd
-    ],
+    handlers=handlers,
     force=True  # Перезаписываем существующую конфигурацию
 )
+
 logger = logging.getLogger(__name__)
 # Отключаем буферизацию для немедленного вывода логов
 sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
 sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, 'reconfigure') else None
+
+logger.info(f"Логирование настроено. Общие логи: {log_file}, Ошибки: {error_log_file}")
 
 # Константы
 DATABASE_PATH = "bot_database.db"
