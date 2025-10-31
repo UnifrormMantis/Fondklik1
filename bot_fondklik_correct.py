@@ -858,7 +858,7 @@ class FondklikBot:
         # Получаем активный кошелек из Payment Bot через правильный эндпоинт
         try:
             from payment_client import payment_client
-            payment_wallet_result = payment_client.get_payment_wallet(user_wallet_from_db)
+            payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
             
             if not payment_wallet_result or not payment_wallet_result.get("success"):
                 # Если Payment Bot недоступен, используем дефолтный кошелек
