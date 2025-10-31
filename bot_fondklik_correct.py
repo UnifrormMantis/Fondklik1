@@ -856,28 +856,34 @@ class FondklikBot:
             return
         
         # Получаем активный кошелек из Payment Bot через правильный эндпоинт
-        from payment_client import payment_client
-        payment_wallet_result = payment_client.get_payment_wallet(user_wallet_from_db)
-        
-        if not payment_wallet_result.get("success"):
-            # Если Payment Bot недоступен, используем дефолтный кошелек
-            payment_wallet = "TPersistenceTest123456789012345678901234"
-            logger.warning(f"Payment Bot недоступен, используется дефолтный кошелек: {payment_wallet}")
-        else:
-            payment_wallet = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
-            logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet}")
+        try:
+            from payment_client import payment_client
+            payment_wallet_result = payment_client.get_payment_wallet(user_wallet_from_db)
             
-            # Регистрируем кошелек пользователя для отслеживания платежей
+            if not payment_wallet_result or not payment_wallet_result.get("success"):
+                # Если Payment Bot недоступен, используем дефолтный кошелек
+                payment_wallet = "TPersistenceTest123456789012345678901234"
+                logger.warning(f"Payment Bot недоступен или ошибка: {payment_wallet_result}, используется дефолтный кошелек: {payment_wallet}")
+            else:
+                payment_wallet = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
+                logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet}")
+        except Exception as e:
+            logger.error(f"Ошибка получения кошелька из Payment Bot: {e}", exc_info=True)
+            payment_wallet = "TPersistenceTest123456789012345678901234"
+            logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet}")
+        
+        # Регистрируем кошелек пользователя для отслеживания платежей (опционально)
+        try:
             register_result = payment_client.register_user_wallet(
                 user_id=user.id,
                 user_wallet=user_wallet_from_db,
                 deposit_type="Авто депозит",
                 min_amount=50.0
             )
-            if register_result.get("success"):
+            if register_result and register_result.get("success"):
                 logger.info(f"Кошелек пользователя зарегистрирован: {user_wallet_from_db}")
-            else:
-                logger.warning(f"Не удалось зарегистрировать кошелек пользователя: {register_result.get('error')}")
+        except Exception as e:
+            logger.warning(f"Не удалось зарегистрировать кошелек пользователя (не критично): {e}")
         
         # Сохраняем кошелек для оплаты в контекст
         context.user_data['payment_wallet'] = payment_wallet
@@ -2597,28 +2603,36 @@ https://t.me/your_bot?start={referral_code}
             return
         
         # Получаем активный кошелек из Payment Bot через правильный эндпоинт
-        from payment_client import payment_client
-        payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
-        
-        if not payment_wallet_result.get("success"):
-            # Если Payment Bot недоступен, используем дефолтный кошелек
-            payment_wallet = "TPersistenceTest123456789012345678901234"
-            logger.warning(f"Payment Bot недоступен, используется дефолтный кошелек: {payment_wallet}")
-        else:
-            payment_wallet = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
-            logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet}")
+        try:
+            from payment_client import payment_client
+            payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
             
-            # Регистрируем кошелек пользователя для отслеживания платежей
+            if not payment_wallet_result or not payment_wallet_result.get("success"):
+                # Если Payment Bot недоступен, используем дефолтный кошелек
+                payment_wallet_addr = "TPersistenceTest123456789012345678901234"
+                logger.warning(f"Payment Bot недоступен или ошибка: {payment_wallet_result}, используется дефолтный кошелек: {payment_wallet_addr}")
+            else:
+                payment_wallet_addr = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
+                logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet_addr}")
+        except Exception as e:
+            logger.error(f"Ошибка получения кошелька из Payment Bot: {e}", exc_info=True)
+            payment_wallet_addr = "TPersistenceTest123456789012345678901234"
+            logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet_addr}")
+        
+        payment_wallet = payment_wallet_addr
+        
+        # Регистрируем кошелек пользователя для отслеживания платежей (опционально)
+        try:
             register_result = payment_client.register_user_wallet(
                 user_id=user_id,
                 user_wallet=user_wallet,
                 deposit_type=f"{days} дней",
                 min_amount=50.0
             )
-            if register_result.get("success"):
+            if register_result and register_result.get("success"):
                 logger.info(f"Кошелек пользователя зарегистрирован: {user_wallet}")
-            else:
-                logger.warning(f"Не удалось зарегистрировать кошелек пользователя: {register_result.get('error')}")
+        except Exception as e:
+            logger.warning(f"Не удалось зарегистрировать кошелек пользователя (не критично): {e}")
         
         if not payment_wallet:
             error_message = f"""❌ **Кошелек для приема платежей не настроен**
