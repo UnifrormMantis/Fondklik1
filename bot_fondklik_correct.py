@@ -176,9 +176,63 @@ class FondklikBot:
         # Регистрируем платежные обработчики
         register_payment_handlers(self.application)
 
+    async def delete_previous_bot_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Удалить предыдущее сообщение бота (кроме команды /start и текущего редактируемого сообщения)"""
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+        
+        # Получаем message_id последнего сообщения бота из user_data
+        last_bot_message_id = context.user_data.get('last_bot_message_id')
+        
+        # Проверяем, не является ли это сообщением от команды /start
+        is_start_message = context.user_data.get('is_start_message', False)
+        
+        # Если это callback_query, получаем message_id текущего сообщения, которое редактируем
+        current_message_id = None
+        if update.callback_query and update.callback_query.message:
+            current_message_id = update.callback_query.message.message_id
+        
+        # Не удаляем сообщение, если:
+        # 1. Это сообщение от /start
+        # 2. Это сообщение, которое мы сейчас редактируем
+        if last_bot_message_id and not is_start_message:
+            # Если мы редактируем сообщение, не удаляем его
+            if current_message_id and last_bot_message_id == current_message_id:
+                logger.debug(f"Пропускаем удаление - это сообщение редактируется: {last_bot_message_id}")
+            else:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=last_bot_message_id)
+                    logger.debug(f"Удалено предыдущее сообщение бота: {last_bot_message_id}")
+                except Exception as e:
+                    # Игнорируем ошибки (сообщение могло быть уже удалено или недоступно)
+                    logger.debug(f"Не удалось удалить сообщение {last_bot_message_id}: {e}")
+        
+        # Сбрасываем флаг /start после первого удаления
+        if is_start_message:
+            context.user_data['is_start_message'] = False
+
+    async def send_message_with_cleanup(self, update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                                       message_func, *args, **kwargs):
+        """Отправить сообщение с автоматическим удалением предыдущего (кроме /start)"""
+        # Удаляем предыдущее сообщение
+        await self.delete_previous_bot_message(update, context)
+        
+        # Отправляем новое сообщение
+        sent_message = await message_func(*args, **kwargs)
+        
+        # Сохраняем message_id для последующего удаления
+        if sent_message and hasattr(sent_message, 'message_id'):
+            context.user_data['last_bot_message_id'] = sent_message.message_id
+            return sent_message
+        
+        return sent_message
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         user = update.effective_user
+        
+        # Помечаем, что это сообщение от /start (не удаляем его)
+        context.user_data['is_start_message'] = True
         
         # Проверяем, есть ли реферальный код в команде
         referral_code = None
@@ -224,7 +278,11 @@ class FondklikBot:
         
         # Проверяем админские права
         if not self.is_admin(user.id):
-            await update.message.reply_text("❌ У вас нет прав администратора")
+            await self.send_message_with_cleanup(
+                update, context,
+                update.message.reply_text,
+                "❌ У вас нет прав администратора"
+            )
             return
         
         # Показываем админское меню
@@ -250,7 +308,9 @@ class FondklikBot:
         # ID фото логотипа ФондКлик
         logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
         
-        await update.message.reply_photo(
+        await self.send_message_with_cleanup(
+            update, context,
+            update.message.reply_photo,
             photo=logo_photo_id,
             caption=message_text,
             reply_markup=reply_markup
@@ -302,6 +362,10 @@ class FondklikBot:
         """Показать главное меню"""
         user = update.effective_user
         
+        # Удаляем предыдущее сообщение бота (кроме /start)
+        if not update.callback_query:
+            await self.delete_previous_bot_message(update, context)
+        
         keyboard = [
             [InlineKeyboardButton("💰 Внести средства", callback_data="deposit")],
             [InlineKeyboardButton("👥 Реферальная система", callback_data="referral")],
@@ -333,7 +397,9 @@ class FondklikBot:
                 reply_markup=reply_markup
             )
         else:
-            await update.message.reply_photo(
+            await self.send_message_with_cleanup(
+                update, context,
+                update.message.reply_photo,
                 photo=logo_photo_id,
                 caption=message_text,
                 reply_markup=reply_markup
@@ -342,10 +408,14 @@ class FondklikBot:
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
         query = update.callback_query
-        await query.answer()
         
         data = query.data
         logger.info(f"Button callback received: {data}")
+        
+        # Отвечаем на callback, чтобы убрать индикатор загрузки
+        # Но не делаем это для create_deposit_payment, так как там будет свой ответ
+        if not data.startswith("create_deposit_payment_"):
+            await query.answer()
         
         try:
             if data == "deposit":
@@ -603,17 +673,23 @@ class FondklikBot:
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     
-                    await update.message.reply_text(
+                    await self.send_message_with_cleanup(
+                        update, context,
+                        update.message.reply_text,
                         text=message_text,
                         reply_markup=reply_markup,
                         parse_mode='Markdown'
                     )
                 else:
-                    await update.message.reply_text(
+                    await self.send_message_with_cleanup(
+                        update, context,
+                        update.message.reply_text,
                         "❌ Ошибка сохранения кошелька. Попробуйте еще раз."
                     )
             else:
-                await update.message.reply_text(
+                await self.send_message_with_cleanup(
+                    update, context,
+                    update.message.reply_text,
                     "❌ Неверный формат кошелька!\n\n"
                     "Кошелек должен:\n"
                     "• Начинаться с 'T'\n"
@@ -657,7 +733,9 @@ class FondklikBot:
                 
                 # Проверяем минимальную сумму
                 if withdrawal_amount < 50:
-                    await update.message.reply_text(
+                    await self.send_message_with_cleanup(
+                        update, context,
+                        update.message.reply_text,
                         "❌ Минимальная сумма для вывода: 50 USDT\n\n"
                         "Попробуйте еще раз:"
                     )
@@ -665,7 +743,9 @@ class FondklikBot:
                 
                 # Проверяем максимальную сумму
                 if withdrawal_amount > available_balance:
-                    await update.message.reply_text(
+                    await self.send_message_with_cleanup(
+                        update, context,
+                        update.message.reply_text,
                         f"❌ Недостаточно средств!\n\n"
                         f"Доступно к выводу: {available_balance:.2f} USDT\n"
                         f"Запрошено: {withdrawal_amount:.2f} USDT\n\n"
@@ -698,7 +778,9 @@ class FondklikBot:
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                await update.message.reply_text(
+                await self.send_message_with_cleanup(
+                    update, context,
+                    update.message.reply_text,
                     text=message_text,
                     reply_markup=reply_markup,
                     parse_mode='Markdown'
@@ -708,7 +790,9 @@ class FondklikBot:
                 context.user_data['awaiting_referral_withdrawal'] = False
                 
             except ValueError:
-                await update.message.reply_text(
+                await self.send_message_with_cleanup(
+                    update, context,
+                    update.message.reply_text,
                     "❌ Неверный формат суммы!\n\n"
                     "Введите число (например: 100 или 150.5)\n\n"
                     "Попробуйте еще раз:"
@@ -719,7 +803,9 @@ class FondklikBot:
             username = text.replace('@', '').strip()  # Убираем @ если есть
             
             if not username:
-                await update.message.reply_text(
+                await self.send_message_with_cleanup(
+                    update, context,
+                    update.message.reply_text,
                     "❌ Username не может быть пустым!\n\n"
                     "Попробуйте еще раз:"
                 )
@@ -738,7 +824,9 @@ class FondklikBot:
                     user_data = cursor.fetchone()
                     
                     if not user_data:
-                        await update.message.reply_text(
+                        await self.send_message_with_cleanup(
+                            update, context,
+                            update.message.reply_text,
                             f"❌ Пользователь @{username} не найден!\n\n"
                             "Проверьте правильность написания username.\n\n"
                             "Попробуйте еще раз:"
@@ -825,7 +913,9 @@ class FondklikBot:
                     ]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     
-                    await update.message.reply_text(
+                    await self.send_message_with_cleanup(
+                        update, context,
+                        update.message.reply_text,
                         text=message_text,
                         reply_markup=reply_markup
                     )
@@ -835,7 +925,9 @@ class FondklikBot:
                     
             except Exception as e:
                 logger.error(f"Ошибка поиска пользователя: {e}")
-                await update.message.reply_text(
+                await self.send_message_with_cleanup(
+                    update, context,
+                    update.message.reply_text,
                     "❌ Произошла ошибка при поиске пользователя.\n\n"
                     "Попробуйте еще раз:"
                 )
@@ -856,7 +948,9 @@ class FondklikBot:
         # Получаем информацию о фото
         photo = message.photo[-1]  # Берем фото наивысшего качества
         
-        sent_message = await message.reply_text(
+        await self.send_message_with_cleanup(
+            update, context,
+            message.reply_text,
             f"📸 Спасибо за фото! Размер: {photo.width}x{photo.height}\n\n"
             "🤖 Используйте кнопки меню для навигации или команду /menu"
         )
@@ -871,7 +965,9 @@ class FondklikBot:
         # Получаем кошелек пользователя из базы данных
         user_wallet_from_db = self.get_wallet_address(user.id)
         if not user_wallet_from_db:
-            await update.message.reply_text(
+            await self.send_message_with_cleanup(
+                update, context,
+                update.message.reply_text,
                 "❌ Кошелек не найден в базе данных. Пожалуйста, укажите кошелек заново."
             )
             return
@@ -925,7 +1021,9 @@ class FondklikBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(
+        await self.send_message_with_cleanup(
+            update, context,
+            update.message.reply_text,
             text=message_text,
             reply_markup=reply_markup
         )
@@ -2609,6 +2707,12 @@ https://t.me/your_bot?start={referral_code}
                 logger.error("update.callback_query is None")
                 return
             
+            # Отвечаем на callback, чтобы убрать индикатор загрузки
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass  # Игнорируем ошибки
+            
             user_id = update.effective_user.id
             logger.info(f"Создание платежа для пользователя {user_id}, депозит: {days} дней")
             
@@ -2721,57 +2825,37 @@ https://t.me/your_bot?start={referral_code}
             logger.info(f"Отправляем сообщение с кошельком: {payment_wallet}")
             logger.info(f"Длина message_text: {len(message_text)} символов")
             
+            # Всегда пытаемся редактировать текущее сообщение, а не отправлять новое
             try:
                 await update.callback_query.edit_message_media(
-                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text, parse_mode='Markdown'),
+                    reply_markup=reply_markup
                 )
+                # Сохраняем message_id редактированного сообщения
+                if update.callback_query.message:
+                    context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
             except Exception as media_error:
-                # Если не удалось редактировать медиа, пробуем редактировать как текст
-                logger.warning(f"Не удалось редактировать медиа: {media_error}, пробуем текст")
+                # Если не удалось редактировать медиа, пробуем редактировать подпись (caption)
+                logger.warning(f"Не удалось редактировать медиа: {type(media_error).__name__}: {media_error}, пробуем caption")
                 try:
-                    await update.callback_query.edit_message_text(
-                        text=message_text,
+                    await update.callback_query.edit_message_caption(
+                        caption=message_text,
                         reply_markup=reply_markup,
                         parse_mode='Markdown'
                     )
+                    # Сохраняем message_id редактированного сообщения
+                    if update.callback_query.message:
+                        context.user_data['last_bot_message_id'] = update.callback_query.message.message_id
                 except Exception as text_error:
-                    # Если и это не работает, отправляем новое сообщение
-                    logger.warning(f"Не удалось редактировать текст: {text_error}, отправляем новое сообщение")
+                    # Если и редактирование текста не работает, показываем ошибку
+                    logger.error(f"Не удалось редактировать сообщение: {text_error}")
                     try:
-                        await update.callback_query.answer()
-                    except Exception:
-                        pass  # Игнорируем ошибки ответа на callback
-                    
-                    try:
-                        await context.bot.send_photo(
-                            chat_id=update.effective_chat.id,
-                            photo=logo_photo_id,
-                            caption=message_text,
-                            reply_markup=reply_markup,
-                            parse_mode='Markdown'
+                        await update.callback_query.answer(
+                            "❌ Ошибка отображения. Попробуйте еще раз.",
+                            show_alert=True
                         )
-                    except Exception as send_error:
-                        logger.error(f"Не удалось отправить новое сообщение: {send_error}")
-                        # Последняя попытка - просто текстовое сообщение
-                        try:
-                            await context.bot.send_message(
-                                chat_id=update.effective_chat.id,
-                                text=message_text,
-                                reply_markup=reply_markup,
-                                parse_mode='Markdown'
-                            )
-                        except Exception as final_send_error:
-                            logger.error(f"Критическая ошибка отправки сообщения: {final_send_error}", exc_info=True)
-                            # Всё провалилось - хотя бы ответим на callback
-                            try:
-                                await update.callback_query.answer(
-                                    "❌ Ошибка отображения. Попробуйте еще раз.",
-                                    show_alert=True
-                                )
-                            except Exception:
-                                pass
+                    except Exception:
+                        pass
         except Exception as e:
             error_type = type(e).__name__
             error_message = str(e)
@@ -2793,13 +2877,17 @@ https://t.me/your_bot?start={referral_code}
                         # Последняя попытка - текстовое сообщение
                         try:
                             if update.effective_message:
-                                await update.effective_message.reply_text(
+                                await self.send_message_with_cleanup(
+                                    update, context,
+                                    update.effective_message.reply_text,
                                     "❌ Произошла ошибка при создании платежа.\n\nПопробуйте еще раз через несколько секунд."
                                 )
                         except Exception:
                             pass
                 elif update and update.effective_message:
-                    await update.effective_message.reply_text(
+                    await self.send_message_with_cleanup(
+                        update, context,
+                        update.effective_message.reply_text,
                         "❌ Произошла ошибка при создании платежа.\n\nПопробуйте еще раз."
                     )
             except Exception as final_error:
