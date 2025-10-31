@@ -872,18 +872,7 @@ class FondklikBot:
             payment_wallet = "TPersistenceTest123456789012345678901234"
             logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet}")
         
-        # Регистрируем кошелек пользователя для отслеживания платежей (опционально)
-        try:
-            register_result = payment_client.register_user_wallet(
-                user_id=user.id,
-                user_wallet=user_wallet_from_db,
-                deposit_type="Авто депозит",
-                min_amount=50.0
-            )
-            if register_result and register_result.get("success"):
-                logger.info(f"Кошелек пользователя зарегистрирован: {user_wallet_from_db}")
-        except Exception as e:
-            logger.warning(f"Не удалось зарегистрировать кошелек пользователя (не критично): {e}")
+        # Регистрация кошелька пользователя происходит автоматически через API при проверке платежей
         
         # Сохраняем кошелек для оплаты в контекст
         context.user_data['payment_wallet'] = payment_wallet
@@ -2621,18 +2610,7 @@ https://t.me/your_bot?start={referral_code}
         
         payment_wallet = payment_wallet_addr
         
-        # Регистрируем кошелек пользователя для отслеживания платежей (опционально)
-        try:
-            register_result = payment_client.register_user_wallet(
-                user_id=user_id,
-                user_wallet=user_wallet,
-                deposit_type=f"{days} дней",
-                min_amount=50.0
-            )
-            if register_result and register_result.get("success"):
-                logger.info(f"Кошелек пользователя зарегистрирован: {user_wallet}")
-        except Exception as e:
-            logger.warning(f"Не удалось зарегистрировать кошелек пользователя (не критично): {e}")
+        # Регистрация кошелька пользователя происходит автоматически через API при проверке платежей
         
         if not payment_wallet:
             error_message = f"""❌ **Кошелек для приема платежей не настроен**
