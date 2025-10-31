@@ -329,15 +329,49 @@ async def get_payment_wallet(request: GetPaymentWalletRequest, api_key: str = De
         user_wallet = request.user_wallet
         
         # Читаем активный кошелек из базы Payment Bot (источник истины)
-        PAYMENT_BOT_DB = os.getenv("PAYMENT_BOT_DB_PATH", "/opt/fondklik/payment_bot/payment_bot.db")
+        # Payment Bot использует payments.db в своей директории
+        PAYMENT_BOT_DB_PATHS = [
+            os.getenv("PAYMENT_BOT_DB_PATH"),  # Переменная окружения (приоритет)
+            "/opt/fondklik/payment_bot/payments.db",  # Основной путь на VPS
+            "/opt/fondklik/payment_bot/payment_bot.db",  # Альтернативный путь
+            "payment_bot.db",  # Для разработки
+            "payments.db"  # Для разработки
+        ]
         
-        # Если файл не существует, пробуем локальный путь для разработки
-        if not os.path.exists(PAYMENT_BOT_DB):
-            PAYMENT_BOT_DB = "payment_bot.db"
+        PAYMENT_BOT_DB = None
+        for db_path in PAYMENT_BOT_DB_PATHS:
+            if db_path and os.path.exists(db_path):
+                PAYMENT_BOT_DB = db_path
+                break
+        
+        if not PAYMENT_BOT_DB:
+            logger.error("База данных Payment Bot не найдена. Проверенные пути: " + str(PAYMENT_BOT_DB_PATHS))
+            raise HTTPException(status_code=500, detail="База данных Payment Bot не найдена")
         
         try:
             conn = sqlite3.connect(PAYMENT_BOT_DB)
             cursor = conn.cursor()
+            
+            # Проверить существование таблицы
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_wallets'")
+            table_exists = cursor.fetchone()
+            
+            if not table_exists:
+                # Таблица не существует - создать её (Payment Bot должен был создать, но на всякий случай)
+                logger.warning(f"Таблица user_wallets не найдена в {PAYMENT_BOT_DB}, создаем...")
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS user_wallets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        wallet_address TEXT NOT NULL,
+                        wallet_name TEXT,
+                        is_active BOOLEAN DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, wallet_address)
+                    )
+                ''')
+                conn.commit()
+                logger.info("✅ Таблица user_wallets создана")
             
             cursor.execute('''
                 SELECT wallet_address FROM user_wallets 
@@ -350,11 +384,11 @@ async def get_payment_wallet(request: GetPaymentWalletRequest, api_key: str = De
             conn.close()
             
             if not result:
-                logger.error("Нет активных кошельков в Payment Bot")
+                logger.error(f"Нет активных кошельков в Payment Bot (база: {PAYMENT_BOT_DB})")
                 raise HTTPException(status_code=404, detail="Нет доступных активных кошельков")
             
             active_wallet = result[0]
-            logger.info(f"✅ Возвращаем активный кошелек из Payment Bot для {user_wallet}: {active_wallet}")
+            logger.info(f"✅ Возвращаем активный кошелек из Payment Bot ({PAYMENT_BOT_DB}) для {user_wallet}: {active_wallet}")
             
             return {
                 "success": True,
@@ -388,9 +422,28 @@ async def check_user_payments(request: CheckUserPaymentsRequest, api_key: str = 
         user_wallet = request.user_wallet.upper().strip()
         
         # Получаем текущий активный кошелек из Payment Bot
-        PAYMENT_BOT_DB = os.getenv("PAYMENT_BOT_DB_PATH", "/opt/fondklik/payment_bot/payment_bot.db")
-        if not os.path.exists(PAYMENT_BOT_DB):
-            PAYMENT_BOT_DB = "payment_bot.db"
+        # Payment Bot использует payments.db в своей директории
+        PAYMENT_BOT_DB_PATHS = [
+            os.getenv("PAYMENT_BOT_DB_PATH"),
+            "/opt/fondklik/payment_bot/payments.db",
+            "/opt/fondklik/payment_bot/payment_bot.db",
+            "payment_bot.db",
+            "payments.db"
+        ]
+        
+        PAYMENT_BOT_DB = None
+        for db_path in PAYMENT_BOT_DB_PATHS:
+            if db_path and os.path.exists(db_path):
+                PAYMENT_BOT_DB = db_path
+                break
+        
+        if not PAYMENT_BOT_DB:
+            logger.error("База данных Payment Bot не найдена")
+            return {
+                "success": True,
+                "payments": [],
+                "message": "База данных Payment Bot не найдена"
+            }
         
         conn_bot = sqlite3.connect(PAYMENT_BOT_DB)
         cursor_bot = conn_bot.cursor()
