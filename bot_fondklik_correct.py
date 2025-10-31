@@ -1132,13 +1132,22 @@ class FondklikBot:
                 total_earned = 0.0
                 available_balance = 0.0
             
-            # Экранируем значения для Markdown
-            referral_code_safe = str(referral_code).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]')
+            # Экранируем все специальные символы Markdown для безопасности
+            def escape_markdown(text):
+                """Экранирует все специальные символы Markdown"""
+                special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+                result = str(text)
+                for char in special_chars:
+                    result = result.replace(char, f'\\{char}')
+                return result
             
+            referral_code_safe = escape_markdown(referral_code)
+            
+            # Используем простой текст без Markdown для ссылки, чтобы избежать проблем с парсингом
             message_text = f"""👥 РЕФЕРАЛЬНАЯ СИСТЕМА
 
 🔗 Ссылка для приглашения:
-https://t.me/your_bot?start={referral_code_safe}
+https://t.me/your_bot?start={referral_code}
 
 📊 Статистика:
 • Всего зарегистрировано: {stats['total_registered']} чел.
