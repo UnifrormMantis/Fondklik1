@@ -2582,67 +2582,68 @@ https://t.me/your_bot?start={referral_code}
 
     async def create_deposit_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, days: str, profit: int):
         """Создать платеж для депозита"""
-        user_id = update.effective_user.id
-        
-        # Получаем кошелек пользователя (для проверки, что он настроен)
-        user_wallet = self.get_wallet_address(user_id)
-        
-        if not user_wallet:
-            await update.callback_query.answer("❌ Кошелек не настроен")
-            return
-        
-        # Получаем активный кошелек из Payment Bot через правильный эндпоинт
         try:
-            from payment_client import payment_client
-            payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
+            user_id = update.effective_user.id
             
-            logger.info(f"DEBUG: payment_wallet_result = {payment_wallet_result}")
+            # Получаем кошелек пользователя (для проверки, что он настроен)
+            user_wallet = self.get_wallet_address(user_id)
             
-            if not payment_wallet_result:
+            if not user_wallet:
+                await update.callback_query.answer("❌ Кошелек не настроен")
+                return
+            
+            # Получаем активный кошелек из Payment Bot через правильный эндпоинт
+            try:
+                from payment_client import payment_client
+                payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
+                
+                logger.info(f"DEBUG: payment_wallet_result = {payment_wallet_result}")
+                
+                if not payment_wallet_result:
+                    payment_wallet_addr = "TPersistenceTest123456789012345678901234"
+                    logger.warning(f"Payment Bot вернул None, используется дефолтный кошелек: {payment_wallet_addr}")
+                elif not payment_wallet_result.get("success", False):
+                    # Если Payment Bot недоступен, используем дефолтный кошелек
+                    payment_wallet_addr = "TPersistenceTest123456789012345678901234"
+                    logger.warning(f"Payment Bot недоступен или ошибка: {payment_wallet_result}, используется дефолтный кошелек: {payment_wallet_addr}")
+                else:
+                    payment_wallet_addr = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
+                    logger.info(f"✅ Получен активный кошелек из Payment Bot: {payment_wallet_addr}")
+            except Exception as e:
+                logger.error(f"Ошибка получения кошелька из Payment Bot: {type(e).__name__}: {e}", exc_info=True)
                 payment_wallet_addr = "TPersistenceTest123456789012345678901234"
-                logger.warning(f"Payment Bot вернул None, используется дефолтный кошелек: {payment_wallet_addr}")
-            elif not payment_wallet_result.get("success", False):
-                # Если Payment Bot недоступен, используем дефолтный кошелек
-                payment_wallet_addr = "TPersistenceTest123456789012345678901234"
-                logger.warning(f"Payment Bot недоступен или ошибка: {payment_wallet_result}, используется дефолтный кошелек: {payment_wallet_addr}")
-            else:
-                payment_wallet_addr = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
-                logger.info(f"✅ Получен активный кошелек из Payment Bot: {payment_wallet_addr}")
-        except Exception as e:
-            logger.error(f"Ошибка получения кошелька из Payment Bot: {type(e).__name__}: {e}", exc_info=True)
-            payment_wallet_addr = "TPersistenceTest123456789012345678901234"
-            logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet_addr}")
-        
-        payment_wallet = payment_wallet_addr
-        
-        # Регистрация кошелька пользователя происходит автоматически через API при проверке платежей
-        
-        if not payment_wallet:
-            error_message = f"""❌ **Кошелек для приема платежей не настроен**
+                logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet_addr}")
+            
+            payment_wallet = payment_wallet_addr
+            
+            # Регистрация кошелька пользователя происходит автоматически через API при проверке платежей
+            
+            if not payment_wallet:
+                error_message = f"""❌ **Кошелек для приема платежей не настроен**
 
 💡 **Обратитесь к администратору для настройки**"""
+                
+                keyboard = [
+                    [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
+                
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=error_message),
+                    reply_markup=reply_markup
+                )
+                return
             
-            keyboard = [
-                [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            # Сохраняем данные о депозите для последующего использования
+            context.user_data['deposit_days'] = days
+            context.user_data['deposit_profit'] = profit
+            context.user_data['awaiting_deposit_payment'] = True
+            context.user_data['payment_wallet'] = payment_wallet
             
-            logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
-            
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=error_message),
-                reply_markup=reply_markup
-            )
-            return
-        
-        # Сохраняем данные о депозите для последующего использования
-        context.user_data['deposit_days'] = days
-        context.user_data['deposit_profit'] = profit
-        context.user_data['awaiting_deposit_payment'] = True
-        context.user_data['payment_wallet'] = payment_wallet
-        
-        # Показываем инструкции для внесения средств
-        message_text = f"""💳 ВНЕСЕНИЕ СРЕДСТВ НА ДЕПОЗИТ
+            # Показываем инструкции для внесения средств
+            message_text = f"""💳 ВНЕСЕНИЕ СРЕДСТВ НА ДЕПОЗИТ
 
 📅 Тип депозита: {days} дней ({profit}% прибыль)
 
@@ -2660,20 +2661,26 @@ https://t.me/your_bot?start={referral_code}
 1. Переводите USDT на указанный кошелек
 2. После перевода нажмите "✅ Проверить платеж"
 3. Система автоматически создает депозит на полученную сумму"""
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Проверить платеж", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
-        
-        await update.callback_query.edit_message_media(
-            media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-            reply_markup=reply_markup
-        )
+            
+            keyboard = [
+                [InlineKeyboardButton("✅ Проверить платеж", callback_data=f"check_deposit_payment_auto_{days}_{profit}")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="deposit")]
+            ]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
+            
+            await update.callback_query.edit_message_media(
+                media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.error(f"Критическая ошибка в create_deposit_payment: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                await update.callback_query.answer(f"❌ Ошибка: {type(e).__name__}", show_alert=True)
+            except:
+                pass
 
     async def process_deposit_payment_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, days: str, profit: int):
         """Обработать платеж для депозита"""
