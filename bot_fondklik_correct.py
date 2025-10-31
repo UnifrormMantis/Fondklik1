@@ -2596,15 +2596,20 @@ https://t.me/your_bot?start={referral_code}
             from payment_client import payment_client
             payment_wallet_result = payment_client.get_payment_wallet(user_wallet)
             
-            if not payment_wallet_result or not payment_wallet_result.get("success"):
+            logger.info(f"DEBUG: payment_wallet_result = {payment_wallet_result}")
+            
+            if not payment_wallet_result:
+                payment_wallet_addr = "TPersistenceTest123456789012345678901234"
+                logger.warning(f"Payment Bot вернул None, используется дефолтный кошелек: {payment_wallet_addr}")
+            elif not payment_wallet_result.get("success", False):
                 # Если Payment Bot недоступен, используем дефолтный кошелек
                 payment_wallet_addr = "TPersistenceTest123456789012345678901234"
                 logger.warning(f"Payment Bot недоступен или ошибка: {payment_wallet_result}, используется дефолтный кошелек: {payment_wallet_addr}")
             else:
                 payment_wallet_addr = payment_wallet_result.get("wallet_address", "TPersistenceTest123456789012345678901234")
-                logger.info(f"Получен активный кошелек из Payment Bot: {payment_wallet_addr}")
+                logger.info(f"✅ Получен активный кошелек из Payment Bot: {payment_wallet_addr}")
         except Exception as e:
-            logger.error(f"Ошибка получения кошелька из Payment Bot: {e}", exc_info=True)
+            logger.error(f"Ошибка получения кошелька из Payment Bot: {type(e).__name__}: {e}", exc_info=True)
             payment_wallet_addr = "TPersistenceTest123456789012345678901234"
             logger.warning(f"Используется дефолтный кошелек из-за ошибки: {payment_wallet_addr}")
         
