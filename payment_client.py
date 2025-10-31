@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 # Настройки Payment Bot API
 PAYMENT_API_KEY = os.getenv("PAYMENT_API_KEY", "rsG7Hzt0EaEY5ZoEH4eE96SiY234qpiSYg5d92xrSm4")
 
-# URL для Railway (если задан, используется вместо автопоиска)
-RAILWAY_PAYMENT_API_URL = os.getenv("PAYMENT_API_URL")
+# URL для Payment API (если задан, используется вместо автопоиска)
+PAYMENT_API_URL = os.getenv("PAYMENT_API_URL")
 
 # Порты для автоматического поиска Payment Bot (локально)
 PAYMENT_PORTS = [8000, 8001, 8002, 8003, 8004, 8005, 3000, 3001, 5000, 5001]
@@ -39,11 +39,11 @@ def find_payment_bot():
     if _cached_api_url:
         return _cached_api_url
     
-    # Если задан Railway URL, используем его
-    if RAILWAY_PAYMENT_API_URL:
-        _cached_api_url = RAILWAY_PAYMENT_API_URL
-        logger.info(f"✅ Используется Railway Payment API: {RAILWAY_PAYMENT_API_URL}")
-        return RAILWAY_PAYMENT_API_URL
+    # Если задан Payment API URL, используем его
+    if PAYMENT_API_URL:
+        _cached_api_url = PAYMENT_API_URL
+        logger.info(f"✅ Используется Payment API: {PAYMENT_API_URL}")
+        return PAYMENT_API_URL
     
     logger.info("🔍 Поиск Payment Bot на доступных портах...")
     
