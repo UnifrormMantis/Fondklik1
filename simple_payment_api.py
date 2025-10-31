@@ -322,58 +322,88 @@ class CheckUserPaymentsRequest(BaseModel):
 @app.post("/get-payment-wallet")
 async def get_payment_wallet(request: GetPaymentWalletRequest, api_key: str = Depends(verify_api_key)):
     """Получить активный кошелек для приема платежей"""
+    import sqlite3
+    import os
+    
     try:
         user_wallet = request.user_wallet
         
-        # Получаем самый новый активный кошелек для всех пользователей
-        conn = db.get_connection()
-        cursor = conn.cursor()
+        # Читаем активный кошелек из базы Payment Bot (источник истины)
+        PAYMENT_BOT_DB = os.getenv("PAYMENT_BOT_DB_PATH", "/opt/fondklik/payment_bot/payment_bot.db")
         
-        cursor.execute('''
-            SELECT wallet_address FROM user_wallets 
-            WHERE is_active = 1 
-            ORDER BY created_at DESC
-            LIMIT 1
-        ''')
+        # Если файл не существует, пробуем локальный путь для разработки
+        if not os.path.exists(PAYMENT_BOT_DB):
+            PAYMENT_BOT_DB = "payment_bot.db"
         
-        result = cursor.fetchone()
-        conn.close()
+        try:
+            conn = sqlite3.connect(PAYMENT_BOT_DB)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT wallet_address FROM user_wallets 
+                WHERE is_active = 1 
+                ORDER BY created_at DESC
+                LIMIT 1
+            ''')
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if not result:
+                logger.error("Нет активных кошельков в Payment Bot")
+                raise HTTPException(status_code=404, detail="Нет доступных активных кошельков")
+            
+            active_wallet = result[0]
+            logger.info(f"✅ Возвращаем активный кошелек из Payment Bot для {user_wallet}: {active_wallet}")
+            
+            return {
+                "success": True,
+                "wallet_address": active_wallet
+            }
+            
+        except sqlite3.Error as db_error:
+            logger.error(f"Ошибка доступа к базе Payment Bot: {db_error}")
+            raise HTTPException(status_code=500, detail=f"Ошибка доступа к базе данных: {str(db_error)}")
         
-        if not result:
-            raise HTTPException(status_code=404, detail="Нет доступных активных кошельков")
-        
-        active_wallet = result[0]
-        
-        logger.info(f"Возвращаем актуальный активный кошелек для {user_wallet}: {active_wallet}")
-        
-        return {
-            "success": True,
-            "wallet_address": active_wallet
-        }
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Ошибка получения кошелька для платежа: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
+            logger.error(f"Ошибка получения кошелька для платежа: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
 
 @app.post("/check-user-payments")
 async def check_user_payments(request: CheckUserPaymentsRequest, api_key: str = Depends(verify_api_key)):
-    """Проверить переводы с кошелька пользователя на активный кошелек"""
+    """Проверить переводы с кошелька пользователя на активный кошелек
+    
+    Проверяет по 4 критериям:
+    1. Сходится ли кошелек пользователя с того, с которого пришел перевод
+    2. Точно ли пришли USDT, а не TRON
+    3. Проверка что пришло не меньше 50 USDT
+    4. Перевод поступил на активный кошелек
+    """
+    import sqlite3
+    import os
+    
     try:
-        user_wallet = request.user_wallet
+        user_wallet = request.user_wallet.upper().strip()
         
-        # Получаем текущий активный кошелек (тот же, что возвращает /get-payment-wallet)
-        conn = db.get_connection()
-        cursor = conn.cursor()
+        # Получаем текущий активный кошелек из Payment Bot
+        PAYMENT_BOT_DB = os.getenv("PAYMENT_BOT_DB_PATH", "/opt/fondklik/payment_bot/payment_bot.db")
+        if not os.path.exists(PAYMENT_BOT_DB):
+            PAYMENT_BOT_DB = "payment_bot.db"
         
-        cursor.execute('''
+        conn_bot = sqlite3.connect(PAYMENT_BOT_DB)
+        cursor_bot = conn_bot.cursor()
+        
+        cursor_bot.execute('''
             SELECT wallet_address FROM user_wallets 
             WHERE is_active = 1 
             ORDER BY created_at DESC
             LIMIT 1
         ''')
         
-        result = cursor.fetchone()
-        conn.close()
+        result = cursor_bot.fetchone()
+        conn_bot.close()
         
         if not result:
             return {
@@ -382,38 +412,93 @@ async def check_user_payments(request: CheckUserPaymentsRequest, api_key: str = 
                 "message": "Нет доступных активных кошельков"
             }
         
-        active_wallet = result[0]
+        active_wallet = result[0].upper().strip()
+        logger.info(f"Проверяем переводы от {user_wallet} на {active_wallet}")
         
-        # Создаем связь для отслеживания платежей (если её еще нет)
-        existing_link = db.get_active_wallet_for_user(user_wallet)
-        if not existing_link:
-            db.create_payment_link(user_wallet, active_wallet)
-            logger.info(f"Создана связь для отслеживания платежей: {user_wallet} -> {active_wallet}")
+        # Получаем последние транзакции активного кошелька через TronTracker
+        transactions = tron_tracker.get_trc20_transactions(active_wallet, limit=100)
         
-        # Получаем все платежи пользователя из базы данных
-        payments = db.get_user_payments(user_wallet)
+        # Фильтруем транзакции по 4 критериям
+        valid_payments = []
+        MIN_AMOUNT = 50.0  # Минимум 50 USDT
         
-        # Фильтруем только подтвержденные платежи
-        confirmed_payments = [
-            {
-                "amount": payment["amount"],
-                "tx_hash": payment["tx_hash"],
-                "confirmed": payment["confirmed"],
-                "timestamp": payment["timestamp"]
-            }
-            for payment in payments
-            if payment["confirmed"]
-        ]
+        for tx in transactions:
+            try:
+                # Парсим транзакцию
+                parsed = tron_tracker.parse_trc20_transfer(tx)
+                if not parsed:
+                    continue
+                
+                from_address = parsed.get('from_address', '').upper().strip()
+                to_address = parsed.get('to_address', '').upper().strip()
+                amount = parsed.get('amount', 0)
+                tx_hash = parsed.get('tx_hash', '')
+                
+                # КРИТЕРИЙ 1: Сходится ли кошелек пользователя
+                if from_address != user_wallet:
+                    continue
+                
+                # КРИТЕРИЙ 2: Точно ли пришли USDT (проверяем что parse_trc20_transfer вернул данные - значит это USDT)
+                # Проверка USDT уже выполнена в parse_trc20_transfer (фильтрует по контракту)
+                
+                # КРИТЕРИЙ 4: Перевод поступил на активный кошелек
+                if to_address != active_wallet:
+                    continue
+                
+                # КРИТЕРИЙ 3: Не меньше 50 USDT
+                if amount < MIN_AMOUNT:
+                    logger.info(f"Платеж отклонен: сумма {amount} < {MIN_AMOUNT} USDT")
+                    continue
+                
+                # КРИТЕРИЙ 4: Перевод на активный кошелек (уже проверили выше)
+                # Все критерии выполнены!
+                valid_payments.append({
+                    "amount": amount,
+                    "tx_hash": tx_hash,
+                    "from_address": from_address,
+                    "to_address": to_address,
+                    "confirmed": True,
+                    "timestamp": parsed.get('timestamp', datetime.now().isoformat())
+                })
+                
+                logger.info(f"✅ Найден валидный платеж: {amount} USDT от {from_address} на {to_address}, tx: {tx_hash}")
+                
+            except Exception as e:
+                logger.error(f"Ошибка парсинга транзакции: {e}")
+                continue
         
-        logger.info(f"Найдено {len(confirmed_payments)} подтвержденных платежей для {user_wallet} на {active_wallet}")
+        # Сохраняем найденные платежи в базу для истории
+        if valid_payments:
+            conn_api = db.get_connection()
+            cursor_api = conn_api.cursor()
+            
+            for payment in valid_payments:
+                # Проверяем, не добавлен ли уже этот платеж
+                cursor_api.execute('''
+                    SELECT id FROM payment_tracking 
+                    WHERE tx_hash = ? AND user_wallet = ?
+                ''', (payment['tx_hash'], user_wallet))
+                
+                if not cursor_api.fetchone():
+                    cursor_api.execute('''
+                        INSERT INTO payment_tracking 
+                        (user_wallet, active_wallet, amount, tx_hash, confirmed)
+                        VALUES (?, ?, ?, ?, 1)
+                    ''', (user_wallet, active_wallet, payment['amount'], payment['tx_hash']))
+            
+            conn_api.commit()
+            conn_api.close()
+        
+        logger.info(f"Найдено {len(valid_payments)} валидных платежей для {user_wallet}")
         
         return {
             "success": True,
-            "payments": confirmed_payments
+            "payments": valid_payments,
+            "active_wallet": active_wallet
         }
         
     except Exception as e:
-        logger.error(f"Ошибка проверки платежей пользователя: {e}")
+        logger.error(f"Ошибка проверки платежей пользователя: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
 
 @app.get("/health")

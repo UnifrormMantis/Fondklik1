@@ -205,6 +205,53 @@ class PaymentClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"Ошибка запроса к Payment API: {e}")
             return {"success": False, "error": str(e)}
+    
+    def check_payment(self, user_id: int, user_wallet: str) -> Dict[str, Any]:
+        """Проверить платеж от пользователя (упрощенный метод для бота)
+        
+        Возвращает первый найденный валидный платеж, который:
+        - Отправлен с кошелька пользователя
+        - Это USDT (не TRON)
+        - Не меньше 50 USDT
+        - Поступил на активный кошелек
+        """
+        try:
+            result = self.check_user_payments(user_wallet)
+            
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "payment_found": False,
+                    "error": result.get("error", "Unknown error")
+                }
+            
+            payments = result.get("payments", [])
+            
+            if not payments:
+                return {
+                    "success": True,
+                    "payment_found": False,
+                    "message": "Платеж еще не поступил"
+                }
+            
+            # Возвращаем первый валидный платеж (самый новый)
+            payment = payments[0]
+            
+            return {
+                "success": True,
+                "payment_found": True,
+                "amount": payment.get("amount", 0),
+                "tx_hash": payment.get("tx_hash", ""),
+                "confirmed": payment.get("confirmed", False)
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка проверки платежа: {e}", exc_info=True)
+            return {
+                "success": False,
+                "payment_found": False,
+                "error": str(e)
+            }
 
     def get_wallet_info(self, wallet_address: str) -> Dict[str, Any]:
         """Получить информацию о кошельке"""

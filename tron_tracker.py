@@ -91,14 +91,35 @@ class TronTracker:
                             method = data[:8]
                             if method == 'a9059cbb':  # transfer method signature
                                 # Извлекаем адрес получателя и сумму
-                                to_address = '41' + data[32:72]  # добавляем префикс
+                                to_address_hex = data[32:72]
                                 amount_hex = data[72:136]
                                 
                                 # Конвертируем hex в decimal
                                 amount = int(amount_hex, 16) / 1000000  # USDT имеет 6 decimals
                                 
+                                # Получаем адрес отправителя из транзакции
+                                from_address = None
+                                owner_address = log.get('parameter', {}).get('value', {}).get('owner_address')
+                                if owner_address:
+                                    # Конвертируем base58 если нужно
+                                    from_address = owner_address
+                                else:
+                                    # Пробуем из raw_data транзакции
+                                    raw_data = tx_details.get('raw_data', {})
+                                    if raw_data:
+                                        # Ищем owner_address в контрактах
+                                        for contract in raw_data.get('contract', []):
+                                            owner = contract.get('parameter', {}).get('value', {}).get('owner_address')
+                                            if owner:
+                                                from_address = owner
+                                                break
+                                
+                                # Конвертируем to_address из hex в base58
+                                to_address = self._hex_to_base58('41' + to_address_hex)
+                                
                                 return {
                                     'tx_hash': tx_hash,
+                                    'from_address': from_address,
                                     'to_address': to_address,
                                     'amount': amount,
                                     'timestamp': transaction.get('block_timestamp', 0),
@@ -134,6 +155,20 @@ class TronTracker:
         except Exception as e:
             print(f"Ошибка проверки новых транзакций: {e}")
             return []
+    
+    def _hex_to_base58(self, hex_str: str) -> str:
+        """Конвертировать hex адрес в base58 (упрощенная версия)"""
+        # Tron адреса в API обычно уже в формате base58
+        # Но если нужно конвертировать, используем библиотеку base58
+        try:
+            import base58
+            # Убираем префикс '41' и конвертируем
+            if hex_str.startswith('41'):
+                return base58.b58encode_check(bytes.fromhex(hex_str)).decode()
+            return hex_str
+        except:
+            # Если нет библиотеки, возвращаем как есть
+            return hex_str
     
     def validate_address(self, address: str) -> bool:
         """Валидация Tron адреса"""
