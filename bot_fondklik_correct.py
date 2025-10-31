@@ -170,6 +170,21 @@ class FondklikBot:
                 )
             ''')
             
+            # Таблица заявок на вывод реферальных средств
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS referral_withdrawals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    wallet_address TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    transaction_id TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (telegram_id)
+                )
+            ''')
+            
             # Таблица транзакций
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS transactions (
@@ -2035,7 +2050,7 @@ https://t.me/your_bot?start={referral_code}
                     cursor.execute('''
                         SELECT COUNT(*), COALESCE(SUM(amount), 0) 
                         FROM referral_payments 
-                        WHERE DATE(created_at) = ? AND transaction_id IS NOT NULL
+                        WHERE DATE(created_at) = ? AND paid_at IS NOT NULL
                     ''', (date,))
                     ref_paid_count, ref_paid_sum = cursor.fetchone()
                     
@@ -2424,8 +2439,10 @@ https://t.me/your_bot?start={referral_code}
                 cursor = conn.cursor()
                 
                 # Получаем общую статистику (сумма выплат)
+                # Выплата = amount * (1 + profit_percent / 100) для completed депозитов
                 cursor.execute('''
-                    SELECT COUNT(*), COALESCE(SUM(payout_amount), 0) FROM deposits WHERE status = 'completed'
+                    SELECT COUNT(*), COALESCE(SUM(amount * (1 + profit_percent / 100.0)), 0) 
+                    FROM deposits WHERE status = 'completed'
                 ''')
                 total_stats = cursor.fetchone()
                 total_deposits = total_stats[0]
@@ -2442,7 +2459,7 @@ https://t.me/your_bot?start={referral_code}
                 # Получаем записи для текущей страницы (4 записи на страницу)
                 offset = page * 4
                 cursor.execute('''
-                    SELECT d.payout_amount, d.status, d.created_at, u.first_name, u.username, u.wallet_address
+                    SELECT d.amount, d.profit_percent, d.status, d.created_at, u.first_name, u.username, u.wallet_address
                     FROM deposits d
                     JOIN users u ON d.user_id = u.telegram_id
                     WHERE d.status = 'completed'
@@ -2470,7 +2487,9 @@ https://t.me/your_bot?start={referral_code}
 """
                 
                 for i, deposit in enumerate(deposits):
-                    payout_amount, status, created_at, first_name, username, wallet_address = deposit
+                    amount, profit_percent, status, created_at, first_name, username, wallet_address = deposit
+                    # Вычисляем выплаченную сумму: amount * (1 + profit_percent / 100)
+                    payout_amount = amount * (1 + (profit_percent or 0) / 100.0)
                     # Полный адрес кошелька на отдельной строке
                     wallet_full = wallet_address or 'N/A'
                     date_str = created_at[:10] if created_at else 'N/A'
