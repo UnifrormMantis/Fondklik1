@@ -2671,16 +2671,40 @@ https://t.me/your_bot?start={referral_code}
             
             logo_photo_id = "AgACAgEAAxkBAAEDuYJo_66BLbLpDJoF9f8BIz64KvmdqgACPgtrG6wH-UfzJtBRS0GeTwEAAwIAA3kAAzYE"
             
-            await update.callback_query.edit_message_media(
-                media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
-                reply_markup=reply_markup
-            )
+            try:
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=logo_photo_id, caption=message_text),
+                    reply_markup=reply_markup
+                )
+            except Exception as media_error:
+                # Если не удалось редактировать медиа, пробуем редактировать как текст
+                logger.warning(f"Не удалось редактировать медиа: {media_error}, пробуем текст")
+                try:
+                    await update.callback_query.edit_message_text(
+                        text=message_text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                except Exception as text_error:
+                    # Если и это не работает, отправляем новое сообщение
+                    logger.warning(f"Не удалось редактировать текст: {text_error}, отправляем новое сообщение")
+                    await update.callback_query.answer()
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=logo_photo_id,
+                        caption=message_text,
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
         except Exception as e:
             logger.error(f"Критическая ошибка в create_deposit_payment: {type(e).__name__}: {e}", exc_info=True)
             try:
-                await update.callback_query.answer(f"❌ Ошибка: {type(e).__name__}", show_alert=True)
-            except:
-                pass
+                error_msg = f"❌ Произошла ошибка при создании платежа.\n\nОшибка: {type(e).__name__}\n\nПопробуйте еще раз."
+                await update.callback_query.answer(error_msg, show_alert=True)
+                # Пытаемся вернуть в меню депозитов
+                await self.show_deposit_menu(update, context)
+            except Exception as final_error:
+                logger.error(f"Не удалось обработать ошибку: {final_error}", exc_info=True)
 
     async def process_deposit_payment_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, days: str, profit: int):
         """Обработать платеж для депозита"""
