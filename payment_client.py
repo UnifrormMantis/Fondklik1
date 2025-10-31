@@ -119,23 +119,10 @@ class PaymentClient:
             return {"success": False, "error": str(e)}
     
     def get_active_wallet(self) -> Dict[str, Any]:
-        """Получить активный кошелек для приема платежей"""
-        try:
-            response = requests.get(
-                f"{self.api_url}/active-wallet",
-                headers=self.headers,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Ошибка получения активного кошелька: {response.status_code}")
-                return {"success": False, "error": f"HTTP {response.status_code}"}
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ошибка запроса к Payment API: {e}")
-            return {"success": False, "error": str(e)}
+        """Получить активный кошелек для приема платежей (DEPRECATED - используйте get_payment_wallet)"""
+        # Перенаправляем на новый метод
+        logger.warning("Используется устаревший метод get_active_wallet. Используйте get_payment_wallet(user_wallet)")
+        return self.get_payment_wallet("system")
 
     def get_payment_wallet(self, user_wallet: str) -> Dict[str, Any]:
         """Получить кошелек для приема платежей"""
